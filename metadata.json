@@ -1,0 +1,6 @@
+{
+  "name": "Instagram Scraper via Google Reviews",
+  "description": "Faz o upload de uma planilha com links do Google Reviews e busca o Instagram das empresas.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
