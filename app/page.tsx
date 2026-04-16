@@ -61,7 +61,7 @@ export default function Home() {
       originalRow: row,
       website: row[siteColumnKey] || '',
       instagramLink: null,
-      status: 'pending'
+      status: 'pending' as const
     })).filter(item => item.website !== null && item.website !== undefined && String(item.website).trim() !== '');
 
     if (formattedData.length === 0) {
