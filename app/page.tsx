@@ -4,12 +4,31 @@ import React, { useState, useRef, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import { UploadCloud, Play, Download, CheckCircle2, XCircle, Loader2, AlertCircle, Instagram, FileJson, FileSpreadsheet, Trash2, Key } from 'lucide-react';
 
+type StageDecision = 'discard' | 'manual_review' | 'next_stage';
+
+interface InstagramProfileData {
+  username: string;
+  nome_perfil: string;
+  bio: string;
+  seguidores: number;
+  seguindo: number;
+  total_posts: number;
+  link_bio: string;
+  categoria: string;
+  cidade: string;
+  is_business: boolean;
+}
+
 interface CompanyData {
   id: number;
   originalRow: any;
   website: string;
   inputInstagram: string | null;
   instagramLink: string | null;
+  profileData: InstagramProfileData | null;
+  score: number | null;
+  decision: StageDecision | null;
+  painPoints: string[];
   status: 'pending' | 'processing' | 'success' | 'not_found' | 'error';
   errorMessage?: string;
 }
@@ -76,6 +95,10 @@ export default function Home() {
         website: row[selectedSiteColumn] || '',
         inputInstagram: selectedInstagramColumn ? normalizeInstagramValue(row[selectedInstagramColumn]) : null,
         instagramLink: null,
+        profileData: null,
+        score: null,
+        decision: null,
+        painPoints: [],
         status: 'pending' as const
       }))
       .filter(item => {
@@ -215,16 +238,6 @@ export default function Home() {
         continue;
       }
 
-      // If website is missing but spreadsheet already contains Instagram, use it directly.
-      if ((!currentData[i].website || String(currentData[i].website).trim() === '') && currentData[i].inputInstagram) {
-        currentData[i].instagramLink = currentData[i].inputInstagram;
-        currentData[i].status = 'success';
-        currentData[i].errorMessage = undefined;
-        setProgress({ current: i + 1, total: currentData.length });
-        setData([...currentData]);
-        continue;
-      }
-
       currentData[i].status = 'processing';
       setData([...currentData]);
 
@@ -234,7 +247,8 @@ export default function Home() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
             url: currentData[i].website,
-            apiKey: openAiKey
+            apiKey: openAiKey,
+            instagramUrl: currentData[i].inputInstagram
           })
         });
 
@@ -251,31 +265,60 @@ export default function Home() {
           if (result.instagram) {
             currentData[i].instagramLink = result.instagram;
             currentData[i].status = 'success';
+            currentData[i].profileData = result.profile || null;
+            currentData[i].score = typeof result.analysis?.score === 'number' ? result.analysis.score : null;
+            currentData[i].decision = result.analysis?.decision || null;
+            currentData[i].painPoints = Array.isArray(result.analysis?.pain_points) ? result.analysis.pain_points : [];
+            currentData[i].errorMessage = undefined;
           } else if (currentData[i].inputInstagram) {
             currentData[i].instagramLink = currentData[i].inputInstagram;
             currentData[i].status = 'success';
+            currentData[i].profileData = null;
+            currentData[i].score = null;
+            currentData[i].decision = null;
+            currentData[i].painPoints = [];
             currentData[i].errorMessage = undefined;
           } else {
             currentData[i].status = 'not_found';
+            currentData[i].profileData = null;
+            currentData[i].score = null;
+            currentData[i].decision = null;
+            currentData[i].painPoints = [];
           }
         } else {
           if (currentData[i].inputInstagram) {
             currentData[i].instagramLink = currentData[i].inputInstagram;
             currentData[i].status = 'success';
+            currentData[i].profileData = null;
+            currentData[i].score = null;
+            currentData[i].decision = null;
+            currentData[i].painPoints = [];
             currentData[i].errorMessage = undefined;
           } else {
             currentData[i].status = 'error';
             currentData[i].errorMessage = result.error || 'Erro desconhecido';
+            currentData[i].profileData = null;
+            currentData[i].score = null;
+            currentData[i].decision = null;
+            currentData[i].painPoints = [];
           }
         }
       } catch (err: any) {
         if (currentData[i].inputInstagram) {
           currentData[i].instagramLink = currentData[i].inputInstagram;
           currentData[i].status = 'success';
+          currentData[i].profileData = null;
+          currentData[i].score = null;
+          currentData[i].decision = null;
+          currentData[i].painPoints = [];
           currentData[i].errorMessage = undefined;
         } else {
           currentData[i].status = 'error';
           currentData[i].errorMessage = err.message || 'Erro de rede';
+          currentData[i].profileData = null;
+          currentData[i].score = null;
+          currentData[i].decision = null;
+          currentData[i].painPoints = [];
         }
       }
 
@@ -292,7 +335,20 @@ export default function Home() {
   const exportToExcel = () => {
     const exportData = data.map(item => ({
       ...item.originalRow,
-      'Instagram Encontrado': item.instagramLink || (item.status === 'not_found' ? 'Não encontrado' : 'Erro')
+      'Instagram Encontrado': item.instagramLink || (item.status === 'not_found' ? 'Não encontrado' : 'Erro'),
+      'username': item.profileData?.username || '',
+      'nome_perfil': item.profileData?.nome_perfil || '',
+      'bio': item.profileData?.bio || '',
+      'seguidores': item.profileData?.seguidores ?? 0,
+      'seguindo': item.profileData?.seguindo ?? 0,
+      'total_posts': item.profileData?.total_posts ?? 0,
+      'link_bio': item.profileData?.link_bio || '',
+      'categoria': item.profileData?.categoria || '',
+      'cidade': item.profileData?.cidade || '',
+      'is_business': item.profileData?.is_business ?? false,
+      'etapa3_score': item.score ?? '',
+      'etapa3_decisao': item.decision || '',
+      'etapa3_dores': item.painPoints.join(', ')
     }));
 
     const ws = XLSX.utils.json_to_sheet(exportData);
@@ -309,7 +365,14 @@ export default function Home() {
     setError(null);
     setColumns([]);
     setSiteColumn('');
+    setInstagramColumn('');
     if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const decisionLabelMap: Record<StageDecision, string> = {
+    discard: 'descartar',
+    manual_review: 'revisão manual',
+    next_stage: 'próxima etapa'
   };
 
   const getStatusPill = (status: CompanyData['status'], instagramLink: string | null, errorMessage?: string) => {
@@ -522,6 +585,11 @@ export default function Home() {
                       </a>
                       <div>
                         {getStatusPill(item.status, item.instagramLink, item.errorMessage)}
+                        {item.score !== null && item.decision && (
+                          <div className="mt-1 text-[11px] text-[#64748b]">
+                            Score {item.score} - {decisionLabelMap[item.decision]}
+                          </div>
+                        )}
                       </div>
                     </div>
                   ))}
