@@ -8,6 +8,7 @@ interface CompanyData {
   id: number;
   originalRow: any;
   website: string;
+  inputInstagram: string | null;
   instagramLink: string | null;
   status: 'pending' | 'processing' | 'success' | 'not_found' | 'error';
   errorMessage?: string;
@@ -22,6 +23,7 @@ export default function Home() {
   const [fileSize, setFileSize] = useState<string | null>(null);
   const [columns, setColumns] = useState<string[]>([]);
   const [siteColumn, setSiteColumn] = useState<string>('');
+  const [instagramColumn, setInstagramColumn] = useState<string>('');
   const [openAiKey, setOpenAiKey] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -36,8 +38,55 @@ export default function Home() {
     localStorage.setItem('ig_scout_openai_key', val);
   };
 
+  const normalizeInstagramValue = (value: unknown): string | null => {
+    if (value === null || value === undefined) return null;
+
+    let raw = String(value).trim();
+    if (!raw) return null;
+
+    raw = raw.replace(/^@+/, '');
+    raw = raw.replace(/\?.*$/, '').replace(/#.*$/, '').replace(/\/+$/, '');
+
+    if (!raw) return null;
+
+    if (raw.toLowerCase().includes('instagram.com/')) {
+      const withProtocol = raw.startsWith('http') ? raw : `https://${raw}`;
+      const match = withProtocol.match(/instagram\.com\/([a-zA-Z0-9._]+)/i);
+      if (!match?.[1]) return null;
+
+      const lower = withProtocol.toLowerCase();
+      const invalidPaths = ['/p/', '/reel/', '/explore/', '/about/', '/developer/', '/tags/', '/locations/', '/directory/'];
+      if (invalidPaths.some(path => lower.includes(path))) return null;
+
+      return `https://www.instagram.com/${match[1]}/`;
+    }
+
+    if (/^[a-zA-Z0-9._]{1,30}$/.test(raw)) {
+      return `https://www.instagram.com/${raw}/`;
+    }
+
+    return null;
+  };
+
+  const mapRowsToCompanyData = (jsonData: any[], selectedSiteColumn: string, selectedInstagramColumn: string): CompanyData[] => {
+    return jsonData
+      .map((row, index) => ({
+        id: index,
+        originalRow: row,
+        website: row[selectedSiteColumn] || '',
+        inputInstagram: selectedInstagramColumn ? normalizeInstagramValue(row[selectedInstagramColumn]) : null,
+        instagramLink: null,
+        status: 'pending' as const
+      }))
+      .filter(item => {
+        const hasWebsite = item.website !== null && item.website !== undefined && String(item.website).trim() !== '';
+        return hasWebsite || !!item.inputInstagram;
+      });
+  };
+
   const processDataArray = (jsonData: any[]) => {
     let siteColumnKey = '';
+    let instagramColumnKey = '';
     
     if (jsonData.length > 0) {
       const keys = Object.keys(jsonData[0]);
@@ -46,6 +95,10 @@ export default function Home() {
       // Auto-detect website column
       const possibleSiteKeys = ['website', 'site', 'url', 'link'];
       const foundSiteKey = keys.find(k => possibleSiteKeys.some(pk => k.toLowerCase().includes(pk)));
+
+      // Auto-detect instagram column
+      const possibleInstagramKeys = ['instagram', 'insta', 'ig'];
+      const foundInstagramKey = keys.find(k => possibleInstagramKeys.some(ik => k.toLowerCase().includes(ik)));
       
       if (foundSiteKey) {
         setSiteColumn(foundSiteKey);
@@ -54,18 +107,19 @@ export default function Home() {
         setSiteColumn(keys[0]);
         siteColumnKey = keys[0];
       }
+
+      if (foundInstagramKey) {
+        setInstagramColumn(foundInstagramKey);
+        instagramColumnKey = foundInstagramKey;
+      } else {
+        setInstagramColumn('');
+      }
     }
 
-    const formattedData: CompanyData[] = jsonData.map((row, index) => ({
-      id: index,
-      originalRow: row,
-      website: row[siteColumnKey] || '',
-      instagramLink: null,
-      status: 'pending' as const
-    })).filter(item => item.website !== null && item.website !== undefined && String(item.website).trim() !== '');
+    const formattedData: CompanyData[] = mapRowsToCompanyData(jsonData, siteColumnKey, instagramColumnKey);
 
     if (formattedData.length === 0) {
-      setError('Nenhum link de site válido encontrado.');
+      setError('Nenhum site ou instagram válido encontrado.');
       return;
     }
 
@@ -122,13 +176,15 @@ export default function Home() {
     setSiteColumn(newColumn);
     
     // Update existing mapped data to use the new column
-    const updatedData = data.map(item => ({
-      ...item,
-      website: item.originalRow[newColumn] || '',
-      status: 'pending' as const,
-      instagramLink: null,
-      errorMessage: undefined
-    })).filter(item => item.website !== null && item.website !== undefined && String(item.website).trim() !== '');
+    const updatedData = mapRowsToCompanyData(data.map(item => item.originalRow), newColumn, instagramColumn);
+
+    setData(updatedData);
+    setProgress({ current: 0, total: updatedData.length });
+  };
+
+  const updateInstagramColumnSelection = (newColumn: string) => {
+    setInstagramColumn(newColumn);
+    const updatedData = mapRowsToCompanyData(data.map(item => item.originalRow), siteColumn, newColumn);
 
     setData(updatedData);
     setProgress({ current: 0, total: updatedData.length });
@@ -142,6 +198,16 @@ export default function Home() {
 
     for (let i = 0; i < currentData.length; i++) {
       if (currentData[i].status === 'success' || currentData[i].status === 'not_found') {
+        continue;
+      }
+
+      // If website is missing but spreadsheet already contains Instagram, use it directly.
+      if ((!currentData[i].website || String(currentData[i].website).trim() === '') && currentData[i].inputInstagram) {
+        currentData[i].instagramLink = currentData[i].inputInstagram;
+        currentData[i].status = 'success';
+        currentData[i].errorMessage = undefined;
+        setProgress({ current: i + 1, total: currentData.length });
+        setData([...currentData]);
         continue;
       }
 
@@ -171,16 +237,32 @@ export default function Home() {
           if (result.instagram) {
             currentData[i].instagramLink = result.instagram;
             currentData[i].status = 'success';
+          } else if (currentData[i].inputInstagram) {
+            currentData[i].instagramLink = currentData[i].inputInstagram;
+            currentData[i].status = 'success';
+            currentData[i].errorMessage = undefined;
           } else {
             currentData[i].status = 'not_found';
           }
         } else {
-          currentData[i].status = 'error';
-          currentData[i].errorMessage = result.error || 'Erro desconhecido';
+          if (currentData[i].inputInstagram) {
+            currentData[i].instagramLink = currentData[i].inputInstagram;
+            currentData[i].status = 'success';
+            currentData[i].errorMessage = undefined;
+          } else {
+            currentData[i].status = 'error';
+            currentData[i].errorMessage = result.error || 'Erro desconhecido';
+          }
         }
       } catch (err: any) {
-        currentData[i].status = 'error';
-        currentData[i].errorMessage = err.message || 'Erro de rede';
+        if (currentData[i].inputInstagram) {
+          currentData[i].instagramLink = currentData[i].inputInstagram;
+          currentData[i].status = 'success';
+          currentData[i].errorMessage = undefined;
+        } else {
+          currentData[i].status = 'error';
+          currentData[i].errorMessage = err.message || 'Erro de rede';
+        }
       }
 
       setProgress({ current: i + 1, total: currentData.length });
@@ -305,6 +387,22 @@ export default function Home() {
               ))}
             </select>
             <span className="text-[11px] text-[#64748b] mt-1">Selecione onde estão as URLs dos sites (ex: www.empresa.com.br)</span>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <span className="text-xs uppercase tracking-wider font-semibold text-[#64748b]">Instagram (2a chance)</span>
+            <select
+              className="p-2.5 rounded-md border border-[#e2e8f0] bg-[#ffffff] text-sm outline-none focus:border-[#2563eb]"
+              value={instagramColumn}
+              onChange={(e) => updateInstagramColumnSelection(e.target.value)}
+              disabled={columns.length === 0 || isProcessing}
+            >
+              <option value="">Nenhuma</option>
+              {columns.map(col => (
+                <option key={col} value={col}>{col}</option>
+              ))}
+            </select>
+            <span className="text-[11px] text-[#64748b] mt-1">Se a busca no site falhar, usa esta coluna (aceita @usuario, usuario ou URL).</span>
           </div>
 
           <div className="flex flex-col gap-2">
