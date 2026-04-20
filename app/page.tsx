@@ -84,12 +84,26 @@ export default function Home() {
       });
   };
 
+  const getColumnKeys = (jsonData: any[]): string[] => {
+    const keySet = new Set<string>();
+
+    for (const row of jsonData) {
+      if (row && typeof row === 'object' && !Array.isArray(row)) {
+        for (const key of Object.keys(row)) {
+          keySet.add(key);
+        }
+      }
+    }
+
+    return Array.from(keySet);
+  };
+
   const processDataArray = (jsonData: any[]) => {
     let siteColumnKey = '';
     let instagramColumnKey = '';
     
     if (jsonData.length > 0) {
-      const keys = Object.keys(jsonData[0]);
+      const keys = getColumnKeys(jsonData);
       setColumns(keys);
       
       // Auto-detect website column
@@ -161,7 +175,7 @@ export default function Home() {
           const wb = XLSX.read(bstr, { type: 'binary' });
           const wsname = wb.SheetNames[0];
           const ws = wb.Sheets[wsname];
-          const jsonData = XLSX.utils.sheet_to_json(ws) as any[];
+          const jsonData = XLSX.utils.sheet_to_json(ws, { defval: '' }) as any[];
           processDataArray(jsonData);
         } catch (err) {
           setError('Erro ao processar o arquivo Excel.');
