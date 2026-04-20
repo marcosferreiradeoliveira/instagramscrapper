@@ -4,7 +4,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import { UploadCloud, Play, Download, CheckCircle2, XCircle, Loader2, AlertCircle, Instagram, FileJson, FileSpreadsheet, Trash2, Key } from 'lucide-react';
 
-type StageDecision = 'discard' | 'manual_review' | 'next_stage';
+type StageDecision = 'discard' | 'manual_review' | 'scrape_posts';
+type PotentialLevel = 'baixo' | 'medio' | 'alto';
 
 interface InstagramProfileData {
   username: string;
@@ -28,6 +29,11 @@ interface CompanyData {
   profileData: InstagramProfileData | null;
   score: number | null;
   decision: StageDecision | null;
+  businessConfidence: number | null;
+  potentialLevel: PotentialLevel | null;
+  recommendedPostsToScrape: number;
+  classificationReason: string;
+  evaluationSignals: string[];
   painPoints: string[];
   status: 'pending' | 'processing' | 'success' | 'not_found' | 'error';
   errorMessage?: string;
@@ -43,6 +49,7 @@ export default function Home() {
   const [columns, setColumns] = useState<string[]>([]);
   const [siteColumn, setSiteColumn] = useState<string>('');
   const [instagramColumn, setInstagramColumn] = useState<string>('');
+  const [selectedEvaluationId, setSelectedEvaluationId] = useState<number | null>(null);
   const [openAiKey, setOpenAiKey] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -98,6 +105,11 @@ export default function Home() {
         profileData: null,
         score: null,
         decision: null,
+        businessConfidence: null,
+        potentialLevel: null,
+        recommendedPostsToScrape: 0,
+        classificationReason: '',
+        evaluationSignals: [],
         painPoints: [],
         status: 'pending' as const
       }))
@@ -263,12 +275,26 @@ export default function Home() {
 
         if (response.ok) {
           if (result.instagram) {
+            const classifier = result.lead_classifier || null;
             currentData[i].instagramLink = result.instagram;
             currentData[i].status = 'success';
             currentData[i].profileData = result.profile || null;
             currentData[i].score = typeof result.analysis?.score === 'number' ? result.analysis.score : null;
-            currentData[i].decision = result.analysis?.decision || null;
-            currentData[i].painPoints = Array.isArray(result.analysis?.pain_points) ? result.analysis.pain_points : [];
+            currentData[i].decision = classifier?.decision || result.analysis?.decision || null;
+            currentData[i].businessConfidence = typeof classifier?.business_confidence === 'number' ? classifier.business_confidence : null;
+            currentData[i].potentialLevel = classifier?.potential_level || null;
+            currentData[i].recommendedPostsToScrape = Number(classifier?.recommended_posts_to_scrape || 0);
+            currentData[i].classificationReason = classifier?.reason || '';
+            currentData[i].evaluationSignals = Array.isArray(classifier?.commercial_signals)
+              ? classifier.commercial_signals
+              : Array.isArray(result.analysis?.signals)
+                ? result.analysis.signals
+                : [];
+            currentData[i].painPoints = Array.isArray(classifier?.likely_pains)
+              ? classifier.likely_pains
+              : Array.isArray(result.analysis?.pain_points)
+                ? result.analysis.pain_points
+                : [];
             currentData[i].errorMessage = undefined;
           } else if (currentData[i].inputInstagram) {
             currentData[i].instagramLink = currentData[i].inputInstagram;
@@ -276,6 +302,11 @@ export default function Home() {
             currentData[i].profileData = null;
             currentData[i].score = null;
             currentData[i].decision = null;
+            currentData[i].businessConfidence = null;
+            currentData[i].potentialLevel = null;
+            currentData[i].recommendedPostsToScrape = 0;
+            currentData[i].classificationReason = '';
+            currentData[i].evaluationSignals = [];
             currentData[i].painPoints = [];
             currentData[i].errorMessage = undefined;
           } else {
@@ -283,6 +314,11 @@ export default function Home() {
             currentData[i].profileData = null;
             currentData[i].score = null;
             currentData[i].decision = null;
+            currentData[i].businessConfidence = null;
+            currentData[i].potentialLevel = null;
+            currentData[i].recommendedPostsToScrape = 0;
+            currentData[i].classificationReason = '';
+            currentData[i].evaluationSignals = [];
             currentData[i].painPoints = [];
           }
         } else {
@@ -292,6 +328,11 @@ export default function Home() {
             currentData[i].profileData = null;
             currentData[i].score = null;
             currentData[i].decision = null;
+            currentData[i].businessConfidence = null;
+            currentData[i].potentialLevel = null;
+            currentData[i].recommendedPostsToScrape = 0;
+            currentData[i].classificationReason = '';
+            currentData[i].evaluationSignals = [];
             currentData[i].painPoints = [];
             currentData[i].errorMessage = undefined;
           } else {
@@ -300,6 +341,11 @@ export default function Home() {
             currentData[i].profileData = null;
             currentData[i].score = null;
             currentData[i].decision = null;
+            currentData[i].businessConfidence = null;
+            currentData[i].potentialLevel = null;
+            currentData[i].recommendedPostsToScrape = 0;
+            currentData[i].classificationReason = '';
+            currentData[i].evaluationSignals = [];
             currentData[i].painPoints = [];
           }
         }
@@ -310,6 +356,11 @@ export default function Home() {
           currentData[i].profileData = null;
           currentData[i].score = null;
           currentData[i].decision = null;
+          currentData[i].businessConfidence = null;
+          currentData[i].potentialLevel = null;
+          currentData[i].recommendedPostsToScrape = 0;
+          currentData[i].classificationReason = '';
+          currentData[i].evaluationSignals = [];
           currentData[i].painPoints = [];
           currentData[i].errorMessage = undefined;
         } else {
@@ -318,6 +369,11 @@ export default function Home() {
           currentData[i].profileData = null;
           currentData[i].score = null;
           currentData[i].decision = null;
+          currentData[i].businessConfidence = null;
+          currentData[i].potentialLevel = null;
+          currentData[i].recommendedPostsToScrape = 0;
+          currentData[i].classificationReason = '';
+          currentData[i].evaluationSignals = [];
           currentData[i].painPoints = [];
         }
       }
@@ -348,6 +404,11 @@ export default function Home() {
       'is_business': item.profileData?.is_business ?? false,
       'etapa3_score': item.score ?? '',
       'etapa3_decisao': item.decision || '',
+      'etapa3_business_confidence': item.businessConfidence ?? '',
+      'etapa3_potential_level': item.potentialLevel || '',
+      'etapa3_recommended_posts_to_scrape': item.recommendedPostsToScrape,
+      'etapa3_reason': item.classificationReason,
+      'etapa3_sinais': item.evaluationSignals.join(', '),
       'etapa3_dores': item.painPoints.join(', ')
     }));
 
@@ -366,13 +427,14 @@ export default function Home() {
     setColumns([]);
     setSiteColumn('');
     setInstagramColumn('');
+    setSelectedEvaluationId(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const decisionLabelMap: Record<StageDecision, string> = {
     discard: 'descartar',
     manual_review: 'revisão manual',
-    next_stage: 'próxima etapa'
+    scrape_posts: 'scrape posts'
   };
 
   const getStatusPill = (status: CompanyData['status'], instagramLink: string | null, errorMessage?: string) => {
@@ -396,6 +458,10 @@ export default function Home() {
 
   const successCount = data.filter(d => d.status === 'success').length;
   const completionPercentage = progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0;
+  const selectedEvaluationItem =
+    data.find(item => item.id === selectedEvaluationId) ||
+    data.find(item => item.score !== null) ||
+    null;
 
   return (
     <div className="flex flex-col h-screen bg-[#f8fafc] text-[#1e293b] font-sans overflow-hidden">
@@ -570,7 +636,11 @@ export default function Home() {
               ) : (
                 <div className="flex flex-col">
                   {data.map((item, idx) => (
-                    <div key={item.id} className="px-4 py-3.5 border-b border-[#e2e8f0] grid grid-cols-[1fr_4fr_3fr] gap-4 items-center text-[13px] hover:bg-[#f8fafc] transition-colors last:border-b-0">
+                    <div
+                      key={item.id}
+                      onClick={() => setSelectedEvaluationId(item.id)}
+                      className={`px-4 py-3.5 border-b border-[#e2e8f0] grid grid-cols-[1fr_4fr_3fr] gap-4 items-center text-[13px] hover:bg-[#f8fafc] transition-colors last:border-b-0 cursor-pointer ${selectedEvaluationItem?.id === item.id ? 'bg-[#eff6ff]' : ''}`}
+                    >
                       <span className="font-medium text-[#1e293b]">
                         L-{idx + 1}
                       </span>
@@ -596,6 +666,47 @@ export default function Home() {
                 </div>
               )}
             </div>
+          </div>
+
+          <div className="bg-[#ffffff] rounded-xl border border-[#e2e8f0] p-4 shrink-0 max-h-[260px] overflow-y-auto">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-semibold text-[#1e293b]">Painel da avaliação (Etapa 3)</h3>
+              {selectedEvaluationItem?.score !== null && selectedEvaluationItem?.decision && (
+                <span className="text-xs text-[#64748b]">
+                  Score {selectedEvaluationItem.score} - {decisionLabelMap[selectedEvaluationItem.decision]}
+                </span>
+              )}
+            </div>
+
+            {!selectedEvaluationItem ? (
+              <p className="text-xs text-[#64748b]">Selecione uma linha processada para ver os detalhes da avaliação.</p>
+            ) : (
+              <div className="grid grid-cols-2 gap-3 text-xs text-[#334155]">
+                <div><b>Instagram:</b> {selectedEvaluationItem.instagramLink || '-'}</div>
+                <div><b>Username:</b> {selectedEvaluationItem.profileData?.username || '-'}</div>
+                <div><b>Confiança negócio:</b> {selectedEvaluationItem.businessConfidence ?? '-'}</div>
+                <div><b>Potencial:</b> {selectedEvaluationItem.potentialLevel || '-'}</div>
+                <div><b>Nome perfil:</b> {selectedEvaluationItem.profileData?.nome_perfil || '-'}</div>
+                <div><b>Categoria:</b> {selectedEvaluationItem.profileData?.categoria || '-'}</div>
+                <div><b>Seguidores:</b> {selectedEvaluationItem.profileData?.seguidores ?? 0}</div>
+                <div><b>Seguindo:</b> {selectedEvaluationItem.profileData?.seguindo ?? 0}</div>
+                <div><b>Total posts:</b> {selectedEvaluationItem.profileData?.total_posts ?? 0}</div>
+                <div><b>Business:</b> {selectedEvaluationItem.profileData?.is_business ? 'sim' : 'não'}</div>
+                <div><b>Posts recomendados:</b> {selectedEvaluationItem.recommendedPostsToScrape}</div>
+                <div className="col-span-2"><b>Cidade:</b> {selectedEvaluationItem.profileData?.cidade || '-'}</div>
+                <div className="col-span-2"><b>Link bio:</b> {selectedEvaluationItem.profileData?.link_bio || '-'}</div>
+                <div className="col-span-2"><b>Bio:</b> {selectedEvaluationItem.profileData?.bio || '-'}</div>
+                <div className="col-span-2"><b>Motivo:</b> {selectedEvaluationItem.classificationReason || '-'}</div>
+                <div className="col-span-2">
+                  <b>Sinais positivos:</b>{' '}
+                  {selectedEvaluationItem.evaluationSignals.length > 0 ? selectedEvaluationItem.evaluationSignals.join(', ') : 'nenhum sinal detectado'}
+                </div>
+                <div className="col-span-2">
+                  <b>Dores prováveis:</b>{' '}
+                  {selectedEvaluationItem.painPoints.length > 0 ? selectedEvaluationItem.painPoints.join(', ') : 'nenhuma dor detectada'}
+                </div>
+              </div>
+            )}
           </div>
         </main>
       </div>

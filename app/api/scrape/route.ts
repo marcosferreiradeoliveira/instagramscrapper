@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
-type StageDecision = 'discard' | 'manual_review' | 'next_stage';
+type StageDecision = 'discard' | 'manual_review' | 'scrape_posts';
+type PotentialLevel = 'baixo' | 'medio' | 'alto';
 
 interface InstagramProfileData {
   username: string;
@@ -20,6 +21,25 @@ interface Stage3Analysis {
   decision: StageDecision;
   signals: string[];
   pain_points: string[];
+}
+
+interface LeadClassifierResult {
+  is_valid_business: boolean;
+  business_confidence: number;
+  commercial_signals: string[];
+  likely_pains: string[];
+  potential_level: PotentialLevel;
+  decision: StageDecision;
+  recommended_posts_to_scrape: number;
+  reason: string;
+}
+
+interface ScrapedPost {
+  caption: string;
+  likes: number;
+  comments: number;
+  timestamp: string;
+  type: string;
 }
 
 function normalizeInstagramUrl(rawValue: unknown): string | null {
@@ -69,6 +89,51 @@ function parseCountLabel(rawText: string): number {
   if (suffix === 'k') return Math.round(parsed * 1000);
   if (suffix === 'm') return Math.round(parsed * 1000000);
   return Math.round(parsed);
+}
+
+function getRecommendedPostsCount(score: number): number {
+  if (score >= 17) return 10;
+  if (score >= 13) return 7;
+  if (score >= 10) return 5;
+  return 0;
+}
+
+function mapPotentialLevel(score: number, seguidores: number): PotentialLevel {
+  if (score >= 14 || seguidores >= 1000) return 'alto';
+  if (score >= 10 || seguidores >= 301) return 'medio';
+  return 'baixo';
+}
+
+function mapPostType(rawType: string | undefined, isVideo: boolean | undefined): string {
+  if (isVideo) return 'video';
+  if (!rawType) return 'image';
+  if (rawType === 'GraphSidecar') return 'carousel';
+  if (rawType === 'GraphVideo') return 'video';
+  return 'image';
+}
+
+function extractPostsFromTimelineEdges(edges: unknown): ScrapedPost[] {
+  if (!Array.isArray(edges)) return [];
+
+  return edges
+    .map((edge: any): ScrapedPost | null => {
+      const node = edge?.node;
+      if (!node) return null;
+
+      const rawTimestamp = node.taken_at_timestamp;
+      const timestamp = Number.isFinite(rawTimestamp)
+        ? new Date(Number(rawTimestamp) * 1000).toISOString()
+        : '';
+
+      return {
+        caption: node?.edge_media_to_caption?.edges?.[0]?.node?.text || '',
+        likes: Number(node?.edge_liked_by?.count || node?.like_count || 0),
+        comments: Number(node?.edge_media_to_comment?.count || node?.comment_count || 0),
+        timestamp,
+        type: mapPostType(node?.__typename, node?.is_video)
+      };
+    })
+    .filter((post): post is ScrapedPost => post !== null);
 }
 
 function buildStage3Analysis(profile: InstagramProfileData, hasProfilePicture: boolean): Stage3Analysis {
@@ -177,7 +242,7 @@ function buildStage3Analysis(profile: InstagramProfileData, hasProfilePicture: b
   if (!profile.link_bio) painPoints.push('sem link');
   if (!profile.categoria && !hasServiceDescription) painPoints.push('posicionamento fraco');
 
-  let decision: StageDecision = 'next_stage';
+  let decision: StageDecision = 'scrape_posts';
   if (score < 7) decision = 'discard';
   else if (score <= 9) decision = 'manual_review';
 
@@ -189,7 +254,58 @@ function buildStage3Analysis(profile: InstagramProfileData, hasProfilePicture: b
   };
 }
 
-async function scrapeInstagramProfile(instagramUrl: string): Promise<{ profile: InstagramProfileData; analysis: Stage3Analysis }> {
+function buildLeadClassifier(profile: InstagramProfileData, analysis: Stage3Analysis): LeadClassifierResult {
+  const knownDataSignals = [
+    profile.nome_perfil ? 1 : 0,
+    profile.bio ? 1 : 0,
+    profile.total_posts > 0 ? 1 : 0,
+    profile.seguidores > 0 ? 1 : 0,
+    profile.is_business || !!profile.categoria ? 1 : 0,
+    profile.link_bio ? 1 : 0
+  ];
+  const confidenceRaw = knownDataSignals.reduce((sum, item) => sum + item, 0) / knownDataSignals.length;
+  const businessConfidence = Number(confidenceRaw.toFixed(2));
+  const isValidBusiness = businessConfidence >= 0.4 && analysis.score >= 7;
+  const potentialLevel = mapPotentialLevel(analysis.score, profile.seguidores);
+
+  let baseDecision: StageDecision = analysis.decision;
+  if (analysis.score >= 10) {
+    const hasCoreData = Boolean(profile.nome_perfil && profile.bio && profile.total_posts > 0);
+    baseDecision = hasCoreData && businessConfidence >= 0.55 ? 'scrape_posts' : 'manual_review';
+  }
+
+  // Lógica final de decisão pedida
+  let finalDecision: StageDecision;
+  if (analysis.score < 7) {
+    finalDecision = 'discard';
+  } else if (analysis.score >= 10 && baseDecision === 'scrape_posts') {
+    finalDecision = 'scrape_posts';
+  } else if (analysis.score >= 10 && baseDecision === 'manual_review') {
+    finalDecision = 'manual_review';
+  } else {
+    finalDecision = 'manual_review';
+  }
+
+  const recommendedPostsToScrape = finalDecision === 'scrape_posts' ? getRecommendedPostsCount(analysis.score) : 0;
+  const reason = finalDecision === 'discard'
+    ? 'Score baixo para justificar custo de scraping de posts.'
+    : finalDecision === 'manual_review'
+      ? 'Perfil com sinais mistos ou dados insuficientes; revisar antes de investir em scraping.'
+      : `Perfil qualificado para scraping de posts com prioridade de custo (${recommendedPostsToScrape} posts).`;
+
+  return {
+    is_valid_business: isValidBusiness,
+    business_confidence: businessConfidence,
+    commercial_signals: analysis.signals,
+    likely_pains: analysis.pain_points,
+    potential_level: potentialLevel,
+    decision: finalDecision,
+    recommended_posts_to_scrape: recommendedPostsToScrape,
+    reason
+  };
+}
+
+async function scrapeInstagramProfile(instagramUrl: string): Promise<{ profile: InstagramProfileData; analysis: Stage3Analysis; posts: ScrapedPost[] }> {
   const username = extractUsernameFromInstagramUrl(instagramUrl);
   if (!username) {
     throw new Error('Username do Instagram inválido');
@@ -210,6 +326,7 @@ async function scrapeInstagramProfile(instagramUrl: string): Promise<{ profile: 
 
   let hasProfilePicture = false;
   let profile = { ...baseProfile };
+  let posts: ScrapedPost[] = [];
 
   try {
     const profileRes = await fetch(`https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`, {
@@ -247,6 +364,7 @@ async function scrapeInstagramProfile(instagramUrl: string): Promise<{ profile: 
           is_business: Boolean(user.is_business_account || user.is_professional_account || user.business_category_name)
         };
         hasProfilePicture = Boolean(user.profile_pic_url_hd || user.profile_pic_url);
+        posts = extractPostsFromTimelineEdges(user?.edge_owner_to_timeline_media?.edges);
       }
     }
   } catch (error) {
@@ -301,7 +419,7 @@ async function scrapeInstagramProfile(instagramUrl: string): Promise<{ profile: 
   }
 
   const analysis = buildStage3Analysis(profile, hasProfilePicture);
-  return { profile, analysis };
+  return { profile, analysis, posts };
 }
 
 export async function POST(req: Request) {
@@ -419,16 +537,28 @@ export async function POST(req: Request) {
       return NextResponse.json({
         instagram: null,
         profile: null,
-        analysis: null
+        analysis: null,
+        lead_classifier: null,
+        posts: []
       });
     }
 
-    const { profile, analysis } = await scrapeInstagramProfile(detectedInstagram);
+    const { profile, analysis, posts } = await scrapeInstagramProfile(detectedInstagram);
+    const leadClassifier = buildLeadClassifier(profile, analysis);
+    const finalAnalysis: Stage3Analysis = {
+      ...analysis,
+      decision: leadClassifier.decision
+    };
+    const postsToReturn = leadClassifier.decision === 'scrape_posts'
+      ? posts.slice(0, leadClassifier.recommended_posts_to_scrape)
+      : [];
 
     return NextResponse.json({
       instagram: detectedInstagram,
       profile,
-      analysis
+      analysis: finalAnalysis,
+      lead_classifier: leadClassifier,
+      posts: postsToReturn
     });
   } catch (error: any) {
     console.error('Scraping error:', error);
