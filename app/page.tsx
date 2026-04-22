@@ -6,6 +6,7 @@ import { UploadCloud, Play, Download, CheckCircle2, XCircle, Loader2, AlertCircl
 
 type StageDecision = 'discard' | 'manual_review' | 'scrape_posts';
 type PotentialLevel = 'baixo' | 'medio' | 'alto';
+type StageSection = 'stage3' | 'stage6' | 'stage8' | 'stage9';
 
 interface InstagramProfileData {
   username: string;
@@ -84,6 +85,7 @@ export default function Home() {
   const [siteColumn, setSiteColumn] = useState<string>('');
   const [instagramColumn, setInstagramColumn] = useState<string>('');
   const [selectedEvaluationId, setSelectedEvaluationId] = useState<number | null>(null);
+  const [activeStageSection, setActiveStageSection] = useState<StageSection>('stage3');
   const [openAiKey, setOpenAiKey] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -501,6 +503,12 @@ export default function Home() {
     manual_review: 'revisão manual',
     scrape_posts: 'scrape posts'
   };
+  const stageSectionLabels: Record<StageSection, string> = {
+    stage3: 'Etapa 3 - Pré-análise',
+    stage6: 'Etapa 6 - Análise completa',
+    stage8: 'Etapa 8 - Mensagens',
+    stage9: 'Etapa 9 - Output final'
+  };
 
   const getStatusPill = (status: CompanyData['status'], instagramLink: string | null, errorMessage?: string) => {
     switch (status) {
@@ -733,9 +741,9 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="bg-[#ffffff] rounded-xl border border-[#e2e8f0] p-4 shrink-0 max-h-[220px] overflow-y-auto">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-sm font-semibold text-[#1e293b]">Painel da avaliação (Etapa 3)</h3>
+          <div className="bg-[#ffffff] rounded-xl border border-[#e2e8f0] p-4 shrink-0 max-h-[240px] overflow-y-auto">
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <h3 className="text-sm font-semibold text-[#1e293b]">Seções por etapas</h3>
               {selectedEvaluationItem?.score !== null && selectedEvaluationItem?.decision && (
                 <span className="text-xs text-[#64748b]">
                   Score {selectedEvaluationItem.score} - {decisionLabelMap[selectedEvaluationItem.decision]}
@@ -743,9 +751,25 @@ export default function Home() {
               )}
             </div>
 
+            <div className="flex gap-2 mb-3 overflow-x-auto pb-1">
+              {(Object.keys(stageSectionLabels) as StageSection[]).map((section) => (
+                <button
+                  key={section}
+                  onClick={() => setActiveStageSection(section)}
+                  className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap border transition-colors ${
+                    activeStageSection === section
+                      ? 'bg-[#2563eb] text-white border-[#2563eb]'
+                      : 'bg-white text-[#334155] border-[#e2e8f0] hover:bg-[#f8fafc]'
+                  }`}
+                >
+                  {stageSectionLabels[section]}
+                </button>
+              ))}
+            </div>
+
             {!selectedEvaluationItem ? (
-              <p className="text-xs text-[#64748b]">Selecione uma linha processada para ver os detalhes da avaliação.</p>
-            ) : (
+              <p className="text-xs text-[#64748b]">Selecione uma linha processada para ver os detalhes da etapa.</p>
+            ) : activeStageSection === 'stage3' ? (
               <div className="grid grid-cols-2 gap-3 text-xs text-[#334155]">
                 <div><b>Instagram:</b> {selectedEvaluationItem.instagramLink || '-'}</div>
                 <div><b>Username:</b> {selectedEvaluationItem.profileData?.username || '-'}</div>
@@ -771,60 +795,47 @@ export default function Home() {
                   {selectedEvaluationItem.painPoints.length > 0 ? selectedEvaluationItem.painPoints.join(', ') : 'nenhuma dor detectada'}
                 </div>
               </div>
-            )}
-          </div>
-
-          <div className="bg-[#ffffff] rounded-xl border border-[#e2e8f0] p-4 shrink-0 max-h-[220px] overflow-y-auto">
-            <h3 className="text-sm font-semibold text-[#1e293b] mb-2">Análise completa (IA principal — Etapa 6)</h3>
-            {!selectedEvaluationItem ? (
-              <p className="text-xs text-[#64748b]">Selecione uma linha com resultado processado.</p>
-            ) : selectedEvaluationItem.decision === 'discard' ? (
-              <p className="text-xs text-[#64748b]">Lead descartado: análise completa não é executada (economia de custo).</p>
-            ) : !selectedEvaluationItem.fullAnalysis ? (
-              <p className="text-xs text-[#64748b]">
-                Sem análise completa ainda. Informe a OpenAI API Key e rode a varredura de novo, ou a chamada à API falhou.
-              </p>
-            ) : (
-              <div className="grid grid-cols-1 gap-2 text-xs text-[#334155]">
-                <div><b>Diagnóstico:</b> {selectedEvaluationItem.fullAnalysis.diagnostico || '—'}</div>
-                <div><b>Maturidade digital:</b> {selectedEvaluationItem.fullAnalysis.maturidade_digital || '—'}</div>
-                <div><b>Potencial comercial:</b> {selectedEvaluationItem.fullAnalysis.potencial_comercial || '—'}</div>
-                <div><b>Dores detectadas:</b> {selectedEvaluationItem.fullAnalysis.dores_detectadas?.join(', ') || '—'}</div>
-                <div><b>Onde perde dinheiro:</b> {selectedEvaluationItem.fullAnalysis.onde_perde_dinheiro?.join(', ') || '—'}</div>
-                <div><b>Programa recomendado:</b> {selectedEvaluationItem.fullAnalysis.programa_recomendado || '—'}</div>
-              </div>
-            )}
-          </div>
-
-          <div className="bg-[#ffffff] rounded-xl border border-[#e2e8f0] p-4 shrink-0 max-h-[200px] overflow-y-auto">
-            <h3 className="text-sm font-semibold text-[#1e293b] mb-2">Mensagens outbound (Etapa 8)</h3>
-            {!selectedEvaluationItem?.fullAnalysis?.messages ? (
-              <p className="text-xs text-[#64748b]">Sem mensagens geradas (depende da análise completa com API key).</p>
-            ) : (
-              <div className="text-xs text-[#334155] space-y-2">
-                <div><b>Mensagem inicial:</b> {selectedEvaluationItem.fullAnalysis.messages.mensagem_inicial || '—'}</div>
-                <div className="font-semibold text-[#64748b]">Follow-ups</div>
-                {(selectedEvaluationItem.fullAnalysis.messages.followups || []).length === 0 ? (
-                  <span>—</span>
-                ) : (
-                  <ul className="space-y-2 pl-0 list-none">
-                    {selectedEvaluationItem.fullAnalysis.messages.followups.map((fu) => (
-                      <li key={fu.numero} className="pl-2 border-l-2 border-[#2563eb]/30">
-                        <span className="text-[#64748b]">#{fu.numero}</span>
-                        <div className="mt-0.5"><b>Msg:</b> {fu.mensagem}</div>
-                        <div><b>Prova:</b> {fu.prova || '—'}</div>
-                        <div><b>CTA:</b> {fu.cta || '—'}</div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
-          </div>
-
-          <div className="bg-[#ffffff] rounded-xl border border-[#e2e8f0] p-4 shrink-0 max-h-[180px] overflow-y-auto">
-            <h3 className="text-sm font-semibold text-[#1e293b] mb-2">Output final do sistema (Etapa 9)</h3>
-            {!selectedEvaluationItem?.finalOutput ? (
+            ) : activeStageSection === 'stage6' ? (
+              selectedEvaluationItem.decision === 'discard' ? (
+                <p className="text-xs text-[#64748b]">Lead descartado: análise completa não é executada (economia de custo).</p>
+              ) : !selectedEvaluationItem.fullAnalysis ? (
+                <p className="text-xs text-[#64748b]">
+                  Sem análise completa ainda. Informe a OpenAI API Key e rode a varredura de novo, ou a chamada à API falhou.
+                </p>
+              ) : (
+                <div className="grid grid-cols-1 gap-2 text-xs text-[#334155]">
+                  <div><b>Diagnóstico:</b> {selectedEvaluationItem.fullAnalysis.diagnostico || '—'}</div>
+                  <div><b>Maturidade digital:</b> {selectedEvaluationItem.fullAnalysis.maturidade_digital || '—'}</div>
+                  <div><b>Potencial comercial:</b> {selectedEvaluationItem.fullAnalysis.potencial_comercial || '—'}</div>
+                  <div><b>Dores detectadas:</b> {selectedEvaluationItem.fullAnalysis.dores_detectadas?.join(', ') || '—'}</div>
+                  <div><b>Onde perde dinheiro:</b> {selectedEvaluationItem.fullAnalysis.onde_perde_dinheiro?.join(', ') || '—'}</div>
+                  <div><b>Programa recomendado:</b> {selectedEvaluationItem.fullAnalysis.programa_recomendado || '—'}</div>
+                </div>
+              )
+            ) : activeStageSection === 'stage8' ? (
+              !selectedEvaluationItem.fullAnalysis?.messages ? (
+                <p className="text-xs text-[#64748b]">Sem mensagens geradas (depende da análise completa com API key).</p>
+              ) : (
+                <div className="text-xs text-[#334155] space-y-2">
+                  <div><b>Mensagem inicial:</b> {selectedEvaluationItem.fullAnalysis.messages.mensagem_inicial || '—'}</div>
+                  <div className="font-semibold text-[#64748b]">Follow-ups</div>
+                  {(selectedEvaluationItem.fullAnalysis.messages.followups || []).length === 0 ? (
+                    <span>—</span>
+                  ) : (
+                    <ul className="space-y-2 pl-0 list-none">
+                      {selectedEvaluationItem.fullAnalysis.messages.followups.map((fu) => (
+                        <li key={fu.numero} className="pl-2 border-l-2 border-[#2563eb]/30">
+                          <span className="text-[#64748b]">#{fu.numero}</span>
+                          <div className="mt-0.5"><b>Msg:</b> {fu.mensagem}</div>
+                          <div><b>Prova:</b> {fu.prova || '—'}</div>
+                          <div><b>CTA:</b> {fu.cta || '—'}</div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )
+            ) : !selectedEvaluationItem.finalOutput ? (
               <p className="text-xs text-[#64748b]">Sem payload agregado (ex.: lead descartado ou sem API key).</p>
             ) : (
               <pre className="text-[10px] leading-relaxed text-[#334155] whitespace-pre-wrap break-words font-mono bg-[#f8fafc] p-2 rounded border border-[#e2e8f0]">
