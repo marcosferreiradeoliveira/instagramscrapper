@@ -823,12 +823,37 @@ async function scrapeInstagramProfile(instagramUrl: string): Promise<{ profile: 
 
         const ogTitle = html.match(/<meta\s+property="og:title"\s+content="([^"]*)"/i)?.[1] || '';
         const ogDescription = html.match(/<meta\s+property="og:description"\s+content="([^"]*)"/i)?.[1] || '';
+        const ogImage = html.match(/<meta\s+property="og:image"\s+content="([^"]*)"/i)?.[1] || '';
         const fullNameFromTitle = ogTitle.match(/^(.*?)\s+\(@/i)?.[1]?.trim() || '';
+        const fullNameFromTitleTag = html.match(/<title>(.*?)\s+\(@/i)?.[1]?.trim() || '';
         const bioFromDescription = ogDescription.match(/- (.*)$/)?.[1]?.trim() || '';
 
-        const followersFromMeta = ogDescription.match(/([\d.,kKmM]+)\s+Followers/i)?.[1] || '';
-        const followingFromMeta = ogDescription.match(/([\d.,kKmM]+)\s+Following/i)?.[1] || '';
-        const postsFromMeta = ogDescription.match(/([\d.,kKmM]+)\s+Posts/i)?.[1] || '';
+        const followersFromMeta =
+          ogDescription.match(/([\d.,kKmM]+)\s+Followers/i)?.[1] ||
+          ogDescription.match(/([\d.,kKmM]+)\s+seguidores/i)?.[1] ||
+          '';
+        const followingFromMeta =
+          ogDescription.match(/([\d.,kKmM]+)\s+Following/i)?.[1] ||
+          ogDescription.match(/([\d.,kKmM]+)\s+seguindo/i)?.[1] ||
+          '';
+        const postsFromMeta =
+          ogDescription.match(/([\d.,kKmM]+)\s+Posts/i)?.[1] ||
+          ogDescription.match(/([\d.,kKmM]+)\s+publicações/i)?.[1] ||
+          ogDescription.match(/([\d.,kKmM]+)\s+publicacoes/i)?.[1] ||
+          '';
+
+        const followersFromJson =
+          html.match(/"edge_followed_by":\{"count":(\d+)\}/)?.[1] ||
+          html.match(/"follower_count":(\d+)/)?.[1] ||
+          '';
+        const followingFromJson =
+          html.match(/"edge_follow":\{"count":(\d+)\}/)?.[1] ||
+          html.match(/"following_count":(\d+)/)?.[1] ||
+          '';
+        const postsFromJson =
+          html.match(/"edge_owner_to_timeline_media":\{"count":(\d+)\}/)?.[1] ||
+          html.match(/"media_count":(\d+)/)?.[1] ||
+          '';
 
         const externalUrlEscaped = html.match(/"external_url":"([^"]+)"/)?.[1] || '';
         const categoryEscaped = html.match(/"category_name":"([^"]*)"/)?.[1] || '';
@@ -838,12 +863,17 @@ async function scrapeInstagramProfile(instagramUrl: string): Promise<{ profile: 
         const category = decodeEscapedUnicode(categoryEscaped).replace(/\\\//g, '/');
         const biographyFromScript = decodeEscapedUnicode(biographyEscaped).replace(/\\\//g, '/');
 
+        if (!hasProfilePicture && ogImage) hasProfilePicture = true;
         if (!profile.nome_perfil && fullNameFromTitle) profile.nome_perfil = fullNameFromTitle;
+        if (!profile.nome_perfil && fullNameFromTitleTag) profile.nome_perfil = fullNameFromTitleTag;
         if (!profile.bio && biographyFromScript) profile.bio = biographyFromScript;
         if (!profile.bio && bioFromDescription) profile.bio = bioFromDescription;
         if (!profile.seguidores && followersFromMeta) profile.seguidores = parseCountLabel(followersFromMeta);
+        if (!profile.seguidores && followersFromJson) profile.seguidores = parseCountLabel(followersFromJson);
         if (!profile.seguindo && followingFromMeta) profile.seguindo = parseCountLabel(followingFromMeta);
+        if (!profile.seguindo && followingFromJson) profile.seguindo = parseCountLabel(followingFromJson);
         if (!profile.total_posts && postsFromMeta) profile.total_posts = parseCountLabel(postsFromMeta);
+        if (!profile.total_posts && postsFromJson) profile.total_posts = parseCountLabel(postsFromJson);
         if (!profile.link_bio && externalUrl) profile.link_bio = externalUrl;
         if (!profile.categoria && category) profile.categoria = category;
         if (!profile.nome_perfil) profile.nome_perfil = username;
