@@ -20,6 +20,38 @@ interface InstagramProfileData {
   is_business: boolean;
 }
 
+interface FollowupMessage {
+  numero: number;
+  mensagem: string;
+  prova: string;
+  cta: string;
+}
+
+interface MessagesBlock {
+  mensagem_inicial: string;
+  followups: FollowupMessage[];
+}
+
+interface FullAnalysis {
+  diagnostico: string;
+  maturidade_digital: string;
+  potencial_comercial: string;
+  dores_detectadas: string[];
+  onde_perde_dinheiro: string[];
+  programa_recomendado: string;
+  messages: MessagesBlock;
+}
+
+interface SystemFinalOutput {
+  lead: Record<string, unknown>;
+  score: number;
+  pre_analysis: Record<string, unknown>;
+  decision: string;
+  posts: unknown[];
+  analysis: Record<string, unknown> | null;
+  messages: MessagesBlock | null;
+}
+
 interface CompanyData {
   id: number;
   originalRow: any;
@@ -35,6 +67,8 @@ interface CompanyData {
   classificationReason: string;
   evaluationSignals: string[];
   painPoints: string[];
+  fullAnalysis: FullAnalysis | null;
+  finalOutput: SystemFinalOutput | null;
   status: 'pending' | 'processing' | 'success' | 'not_found' | 'error';
   errorMessage?: string;
 }
@@ -111,6 +145,8 @@ export default function Home() {
         classificationReason: '',
         evaluationSignals: [],
         painPoints: [],
+        fullAnalysis: null,
+        finalOutput: null,
         status: 'pending' as const
       }))
       .filter(item => {
@@ -295,6 +331,14 @@ export default function Home() {
               : Array.isArray(result.analysis?.pain_points)
                 ? result.analysis.pain_points
                 : [];
+            currentData[i].fullAnalysis =
+              result.full_analysis && typeof result.full_analysis === 'object'
+                ? (result.full_analysis as FullAnalysis)
+                : null;
+            currentData[i].finalOutput =
+              result.final_output && typeof result.final_output === 'object'
+                ? (result.final_output as SystemFinalOutput)
+                : null;
             currentData[i].errorMessage = undefined;
           } else if (currentData[i].inputInstagram) {
             currentData[i].instagramLink = currentData[i].inputInstagram;
@@ -308,6 +352,8 @@ export default function Home() {
             currentData[i].classificationReason = '';
             currentData[i].evaluationSignals = [];
             currentData[i].painPoints = [];
+            currentData[i].fullAnalysis = null;
+            currentData[i].finalOutput = null;
             currentData[i].errorMessage = undefined;
           } else {
             currentData[i].status = 'not_found';
@@ -320,6 +366,8 @@ export default function Home() {
             currentData[i].classificationReason = '';
             currentData[i].evaluationSignals = [];
             currentData[i].painPoints = [];
+            currentData[i].fullAnalysis = null;
+            currentData[i].finalOutput = null;
           }
         } else {
           if (currentData[i].inputInstagram) {
@@ -334,6 +382,8 @@ export default function Home() {
             currentData[i].classificationReason = '';
             currentData[i].evaluationSignals = [];
             currentData[i].painPoints = [];
+            currentData[i].fullAnalysis = null;
+            currentData[i].finalOutput = null;
             currentData[i].errorMessage = undefined;
           } else {
             currentData[i].status = 'error';
@@ -347,6 +397,8 @@ export default function Home() {
             currentData[i].classificationReason = '';
             currentData[i].evaluationSignals = [];
             currentData[i].painPoints = [];
+            currentData[i].fullAnalysis = null;
+            currentData[i].finalOutput = null;
           }
         }
       } catch (err: any) {
@@ -362,6 +414,8 @@ export default function Home() {
           currentData[i].classificationReason = '';
           currentData[i].evaluationSignals = [];
           currentData[i].painPoints = [];
+          currentData[i].fullAnalysis = null;
+          currentData[i].finalOutput = null;
           currentData[i].errorMessage = undefined;
         } else {
           currentData[i].status = 'error';
@@ -375,6 +429,8 @@ export default function Home() {
           currentData[i].classificationReason = '';
           currentData[i].evaluationSignals = [];
           currentData[i].painPoints = [];
+          currentData[i].fullAnalysis = null;
+          currentData[i].finalOutput = null;
         }
       }
 
@@ -409,7 +465,16 @@ export default function Home() {
       'etapa3_recommended_posts_to_scrape': item.recommendedPostsToScrape,
       'etapa3_reason': item.classificationReason,
       'etapa3_sinais': item.evaluationSignals.join(', '),
-      'etapa3_dores': item.painPoints.join(', ')
+      'etapa3_dores': item.painPoints.join(', '),
+      'analise_diagnostico': item.fullAnalysis?.diagnostico ?? '',
+      'analise_maturidade_digital': item.fullAnalysis?.maturidade_digital ?? '',
+      'analise_potencial_comercial': item.fullAnalysis?.potencial_comercial ?? '',
+      'analise_dores_detectadas': item.fullAnalysis?.dores_detectadas?.join(', ') ?? '',
+      'analise_onde_perde_dinheiro': item.fullAnalysis?.onde_perde_dinheiro?.join(', ') ?? '',
+      'analise_programa_recomendado': item.fullAnalysis?.programa_recomendado ?? '',
+      'mensagem_inicial': item.fullAnalysis?.messages?.mensagem_inicial ?? '',
+      'followups_json': JSON.stringify(item.fullAnalysis?.messages?.followups ?? []),
+      'output_final_json': JSON.stringify(item.finalOutput ?? null)
     }));
 
     const ws = XLSX.utils.json_to_sheet(exportData);
@@ -561,7 +626,7 @@ export default function Home() {
               disabled={isProcessing}
             />
             <span className="text-[10px] text-[#64748b] leading-tight">
-              Aumenta a precisão das buscas extraindo o link usando IA inteligente.
+              Necessária para extração no site, classificador (camada 2) e análise completa (camada 6). Descartes não disparam a análise completa (economia).
             </span>
           </div>
 
@@ -668,7 +733,7 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="bg-[#ffffff] rounded-xl border border-[#e2e8f0] p-4 shrink-0 max-h-[260px] overflow-y-auto">
+          <div className="bg-[#ffffff] rounded-xl border border-[#e2e8f0] p-4 shrink-0 max-h-[220px] overflow-y-auto">
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-sm font-semibold text-[#1e293b]">Painel da avaliação (Etapa 3)</h3>
               {selectedEvaluationItem?.score !== null && selectedEvaluationItem?.decision && (
@@ -706,6 +771,65 @@ export default function Home() {
                   {selectedEvaluationItem.painPoints.length > 0 ? selectedEvaluationItem.painPoints.join(', ') : 'nenhuma dor detectada'}
                 </div>
               </div>
+            )}
+          </div>
+
+          <div className="bg-[#ffffff] rounded-xl border border-[#e2e8f0] p-4 shrink-0 max-h-[220px] overflow-y-auto">
+            <h3 className="text-sm font-semibold text-[#1e293b] mb-2">Análise completa (IA principal — Etapa 6)</h3>
+            {!selectedEvaluationItem ? (
+              <p className="text-xs text-[#64748b]">Selecione uma linha com resultado processado.</p>
+            ) : selectedEvaluationItem.decision === 'discard' ? (
+              <p className="text-xs text-[#64748b]">Lead descartado: análise completa não é executada (economia de custo).</p>
+            ) : !selectedEvaluationItem.fullAnalysis ? (
+              <p className="text-xs text-[#64748b]">
+                Sem análise completa ainda. Informe a OpenAI API Key e rode a varredura de novo, ou a chamada à API falhou.
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 gap-2 text-xs text-[#334155]">
+                <div><b>Diagnóstico:</b> {selectedEvaluationItem.fullAnalysis.diagnostico || '—'}</div>
+                <div><b>Maturidade digital:</b> {selectedEvaluationItem.fullAnalysis.maturidade_digital || '—'}</div>
+                <div><b>Potencial comercial:</b> {selectedEvaluationItem.fullAnalysis.potencial_comercial || '—'}</div>
+                <div><b>Dores detectadas:</b> {selectedEvaluationItem.fullAnalysis.dores_detectadas?.join(', ') || '—'}</div>
+                <div><b>Onde perde dinheiro:</b> {selectedEvaluationItem.fullAnalysis.onde_perde_dinheiro?.join(', ') || '—'}</div>
+                <div><b>Programa recomendado:</b> {selectedEvaluationItem.fullAnalysis.programa_recomendado || '—'}</div>
+              </div>
+            )}
+          </div>
+
+          <div className="bg-[#ffffff] rounded-xl border border-[#e2e8f0] p-4 shrink-0 max-h-[200px] overflow-y-auto">
+            <h3 className="text-sm font-semibold text-[#1e293b] mb-2">Mensagens outbound (Etapa 8)</h3>
+            {!selectedEvaluationItem?.fullAnalysis?.messages ? (
+              <p className="text-xs text-[#64748b]">Sem mensagens geradas (depende da análise completa com API key).</p>
+            ) : (
+              <div className="text-xs text-[#334155] space-y-2">
+                <div><b>Mensagem inicial:</b> {selectedEvaluationItem.fullAnalysis.messages.mensagem_inicial || '—'}</div>
+                <div className="font-semibold text-[#64748b]">Follow-ups</div>
+                {(selectedEvaluationItem.fullAnalysis.messages.followups || []).length === 0 ? (
+                  <span>—</span>
+                ) : (
+                  <ul className="space-y-2 pl-0 list-none">
+                    {selectedEvaluationItem.fullAnalysis.messages.followups.map((fu) => (
+                      <li key={fu.numero} className="pl-2 border-l-2 border-[#2563eb]/30">
+                        <span className="text-[#64748b]">#{fu.numero}</span>
+                        <div className="mt-0.5"><b>Msg:</b> {fu.mensagem}</div>
+                        <div><b>Prova:</b> {fu.prova || '—'}</div>
+                        <div><b>CTA:</b> {fu.cta || '—'}</div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="bg-[#ffffff] rounded-xl border border-[#e2e8f0] p-4 shrink-0 max-h-[180px] overflow-y-auto">
+            <h3 className="text-sm font-semibold text-[#1e293b] mb-2">Output final do sistema (Etapa 9)</h3>
+            {!selectedEvaluationItem?.finalOutput ? (
+              <p className="text-xs text-[#64748b]">Sem payload agregado (ex.: lead descartado ou sem API key).</p>
+            ) : (
+              <pre className="text-[10px] leading-relaxed text-[#334155] whitespace-pre-wrap break-words font-mono bg-[#f8fafc] p-2 rounded border border-[#e2e8f0]">
+                {JSON.stringify(selectedEvaluationItem.finalOutput, null, 2)}
+              </pre>
             )}
           </div>
         </main>
