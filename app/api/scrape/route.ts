@@ -903,8 +903,12 @@ export async function POST(req: Request) {
     }
 
     let detectedInstagram: string | null = normalizedInputInstagram;
+    const normalizedWebsiteAsInstagram = hasUrlInput ? normalizeInstagramUrl(url) : null;
+    if (!detectedInstagram && normalizedWebsiteAsInstagram) {
+      detectedInstagram = normalizedWebsiteAsInstagram;
+    }
 
-    if (hasUrlInput) {
+    if (hasUrlInput && !detectedInstagram) {
       // Clean the URL
       let targetUrl = String(url).trim();
       if (!/^https?:\/\//i.test(targetUrl)) {
@@ -913,7 +917,10 @@ export async function POST(req: Request) {
 
       const candidateUrls = /^https?:\/\//i.test(targetUrl)
         ? [targetUrl]
-        : [`https://${targetUrl}`, `http://${targetUrl}`];
+        : (() => {
+            const host = targetUrl.replace(/^www\./i, '');
+            return [`https://${host}`, `https://www.${host}`, `http://${host}`, `http://www.${host}`];
+          })();
 
       // Fetch the URL content (the company's website), preferring HTTPS and falling back to HTTP.
       let response: Response | null = null;

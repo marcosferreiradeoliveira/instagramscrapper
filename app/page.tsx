@@ -529,6 +529,16 @@ export default function Home() {
       case 'not_found':
         return <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-semibold bg-[#fee2e2] text-[#991b1b]">Não Encontrado</span>;
       case 'error':
+        if ((errorMessage || '').includes('403')) {
+          return (
+            <span
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-semibold bg-[#ffedd5] text-[#9a3412]"
+              title={errorMessage}
+            >
+              Bloqueado (403)
+            </span>
+          );
+        }
         return <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-semibold bg-[#fee2e2] text-[#991b1b]" title={errorMessage}>Erro: {errorMessage}</span>;
     }
   };
