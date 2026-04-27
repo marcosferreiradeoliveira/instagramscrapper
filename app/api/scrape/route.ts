@@ -379,6 +379,58 @@ function extractUsernameFromInstagramUrl(igUrl: string): string | null {
   return match?.[1] || null;
 }
 
+function extractInstagramFromHtml(html: string): string | null {
+  const invalidPaths = ['/p/', '/reel/', '/explore/', '/about/', '/developer/', '/tags/', '/locations/', '/directory/'];
+  const isValidProfileLink = (link: string): boolean => {
+    const lowerLink = link.toLowerCase();
+    return !invalidPaths.some((path) => lowerLink.includes(path));
+  };
+
+  const candidates = new Set<string>();
+
+  const canonicalRegexes = [
+    /https?:\/\/(?:www\.)?instagram\.com\/[a-zA-Z0-9._]+\/?/gi,
+    /(?:https?:)?\/\/(?:www\.)?instagram\.com\/[a-zA-Z0-9._]+\/?/gi,
+    /(?:^|["'\s(>])(?:www\.)?instagram\.com\/[a-zA-Z0-9._]+\/?/gi
+  ];
+
+  for (const regex of canonicalRegexes) {
+    const matches = html.match(regex) || [];
+    for (const rawMatch of matches) {
+      const cleaned = rawMatch.replace(/^[^a-z0-9]*/i, '').replace(/[)"'<>,;]+$/g, '').trim();
+      if (!cleaned) continue;
+
+      const withProtocol = cleaned.startsWith('http')
+        ? cleaned
+        : cleaned.startsWith('//')
+          ? `https:${cleaned}`
+          : `https://${cleaned.replace(/^\/+/, '')}`;
+      candidates.add(withProtocol);
+    }
+  }
+
+  const hrefRegex = /href\s*=\s*["']([^"']+)["']/gi;
+  for (const match of html.matchAll(hrefRegex)) {
+    const href = String(match[1] || '').trim().replace(/\\\//g, '/');
+    if (!href || !href.toLowerCase().includes('instagram.com/')) continue;
+
+    const withProtocol = href.startsWith('http')
+      ? href
+      : href.startsWith('//')
+        ? `https:${href}`
+        : `https://${href.replace(/^\/+/, '')}`;
+    candidates.add(withProtocol);
+  }
+
+  for (const candidate of candidates) {
+    if (!isValidProfileLink(candidate)) continue;
+    const normalized = normalizeInstagramUrl(candidate);
+    if (normalized) return normalized;
+  }
+
+  return null;
+}
+
 function decodeEscapedUnicode(text: string): string {
   return text.replace(/\\u([\dA-Fa-f]{4})/g, (_, group) => String.fromCharCode(parseInt(group, 16)));
 }
@@ -1012,24 +1064,10 @@ export async function POST(req: Request) {
         }
 
         // ======================================
-        // FALLBACK: Pure Regex extraction
+        // FALLBACK: robust HTML extraction
         // ======================================
         if (!detectedInstagram) {
-          // Regex to find instagram URLs
-          const igRegex = /https?:\/\/(?:www\.)?instagram\.com\/[a-zA-Z0-9_.]+/gi;
-          const matches = html.match(igRegex) || [];
-
-          if (matches.length > 0) {
-            // Filter out common non-profile links
-            const invalidPaths = ['/p/', '/reel/', '/explore/', '/about/', '/developer/', '/tags/', '/locations/', '/directory/'];
-            const profileLinks = matches.filter(link => {
-              const lowerLink = link.toLowerCase();
-              return !invalidPaths.some(path => lowerLink.includes(path));
-            });
-
-            const uniqueLinks = [...new Set(profileLinks.length > 0 ? profileLinks : matches)];
-            detectedInstagram = normalizeInstagramUrl(uniqueLinks[0] || null);
-          }
+          detectedInstagram = extractInstagramFromHtml(html);
         }
       }
     }
