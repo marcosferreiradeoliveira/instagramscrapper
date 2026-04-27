@@ -106,10 +106,14 @@ export default function Home() {
     let raw = String(value).trim();
     if (!raw) return null;
 
+    const invalidTokens = new Set(['null', 'undefined', 'none', 'n/a', 'na', '-', '--', '.']);
+    if (invalidTokens.has(raw.toLowerCase())) return null;
+
     raw = raw.replace(/^@+/, '');
     raw = raw.replace(/\?.*$/, '').replace(/#.*$/, '').replace(/\/+$/, '');
 
     if (!raw) return null;
+    if (invalidTokens.has(raw.toLowerCase())) return null;
 
     if (raw.toLowerCase().includes('instagram.com/')) {
       const withProtocol = raw.startsWith('http') ? raw : `https://${raw}`;

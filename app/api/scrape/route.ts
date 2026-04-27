@@ -351,10 +351,14 @@ function normalizeInstagramUrl(rawValue: unknown): string | null {
   let raw = String(rawValue).trim();
   if (!raw) return null;
 
+  const invalidTokens = new Set(['null', 'undefined', 'none', 'n/a', 'na', '-', '--', '.']);
+  if (invalidTokens.has(raw.toLowerCase())) return null;
+
   raw = raw.replace(/^@+/, '');
   raw = raw.replace(/\?.*$/, '').replace(/#.*$/, '').replace(/\/+$/, '');
 
   if (!raw) return null;
+  if (invalidTokens.has(raw.toLowerCase())) return null;
 
   if (raw.toLowerCase().includes('instagram.com/')) {
     const withProtocol = raw.startsWith('http') ? raw : `https://${raw}`;
@@ -903,23 +907,48 @@ export async function POST(req: Request) {
     if (hasUrlInput) {
       // Clean the URL
       let targetUrl = String(url).trim();
-      if (!targetUrl.startsWith('http')) {
-        targetUrl = 'http://' + targetUrl;
+      if (!/^https?:\/\//i.test(targetUrl)) {
+        targetUrl = targetUrl.replace(/^\/+/, '');
       }
 
-      // Fetch the URL content (the company's website)
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 seconds timeout to prevent 504 Gateway Timeouts
-      const response = await fetch(targetUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.5'
-        },
-        redirect: 'follow',
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
+      const candidateUrls = /^https?:\/\//i.test(targetUrl)
+        ? [targetUrl]
+        : [`https://${targetUrl}`, `http://${targetUrl}`];
+
+      // Fetch the URL content (the company's website), preferring HTTPS and falling back to HTTP.
+      let response: Response | null = null;
+      let fetchError: Error | null = null;
+      for (const candidate of candidateUrls) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 seconds timeout to prevent hangs
+        try {
+          response = await fetch(candidate, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+              'Accept-Language': 'en-US,en;q=0.5'
+            },
+            redirect: 'follow',
+            signal: controller.signal
+          });
+          fetchError = null;
+
+          // Stop at the first successful response.
+          if (response.ok) break;
+        } catch (err) {
+          fetchError = err as Error;
+          response = null;
+        } finally {
+          clearTimeout(timeoutId);
+        }
+      }
+
+      if (!response && fetchError) {
+        throw fetchError;
+      }
+      if (!response) {
+        throw new Error('Falha ao acessar o site');
+      }
 
       if (!response.ok) {
         if (!detectedInstagram) {
