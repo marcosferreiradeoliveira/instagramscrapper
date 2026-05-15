@@ -1,6 +1,6 @@
 /**
  * Instagram profile + posts via Apify actor apify/instagram-profile-scraper.
- * Requires APIFY_API_TOKEN in server environment.
+ * Token: optional `apifyApiKey` from client, or APIFY_API_TOKEN in env.
  */
 
 export interface ApifyInstagramProfile {
@@ -101,16 +101,37 @@ function mapApifyProfileItem(item: Record<string, unknown>, fallbackUsername: st
   return { profile, posts, hasProfilePicture };
 }
 
+/** Remove espaços invisíveis ao colar */
+export function normalizeApifyApiToken(key: unknown): string {
+  return String(key ?? '')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .trim();
+}
+
+/** Tokens Apify costumam começar com apify_api_ */
+export function isApifyApiKey(key: unknown): boolean {
+  const t = normalizeApifyApiToken(key);
+  return t.length >= 20 && /^apify_api_[a-zA-Z0-9_-]+$/.test(t);
+}
+
 export function getApifyApiToken(): string | null {
   const token = process.env.APIFY_API_TOKEN?.trim();
   return token || null;
 }
 
+/** Preferência: token do cliente (painel); senão variável de ambiente. */
+export function resolveApifyToken(clientToken?: unknown): string | null {
+  if (isApifyApiKey(clientToken)) {
+    return normalizeApifyApiToken(clientToken);
+  }
+  return getApifyApiToken();
+}
+
 export async function fetchInstagramViaApify(
   username: string,
-  instagramUrl: string
+  instagramUrl: string,
+  token: string
 ): Promise<ApifyInstagramScrapeResult | null> {
-  const token = getApifyApiToken();
   if (!token) return null;
 
   const profileUrl = instagramUrl.startsWith('http')

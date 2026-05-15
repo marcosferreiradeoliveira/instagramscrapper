@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { fetchInstagramViaApify, getApifyApiToken } from '@/lib/apifyInstagram';
+import { fetchInstagramViaApify, resolveApifyToken } from '@/lib/apifyInstagram';
 import { isOpenAiApiKey, normalizeOpenAiApiKey } from '@/lib/openai';
 
 /** Apify + OpenAI podem levar vários minutos por lead */
@@ -997,7 +997,10 @@ Retorne apenas JSON válido, sem markdown.`;
   }
 }
 
-async function scrapeInstagramProfile(instagramUrl: string): Promise<{ profile: InstagramProfileData; analysis: Stage3Analysis; posts: ScrapedPost[] }> {
+async function scrapeInstagramProfile(
+  instagramUrl: string,
+  apifyTokenFromClient?: unknown
+): Promise<{ profile: InstagramProfileData; analysis: Stage3Analysis; posts: ScrapedPost[] }> {
   const username = extractUsernameFromInstagramUrl(instagramUrl);
   if (!username) {
     throw new Error('Username do Instagram inválido');
@@ -1020,8 +1023,9 @@ async function scrapeInstagramProfile(instagramUrl: string): Promise<{ profile: 
   let profile = { ...baseProfile };
   let posts: ScrapedPost[] = [];
 
-  if (getApifyApiToken()) {
-    const apifyResult = await fetchInstagramViaApify(username, instagramUrl);
+  const apifyToken = resolveApifyToken(apifyTokenFromClient);
+  if (apifyToken) {
+    const apifyResult = await fetchInstagramViaApify(username, instagramUrl, apifyToken);
     if (apifyResult) {
       profile = { ...baseProfile, ...apifyResult.profile };
       posts = apifyResult.posts;
@@ -1221,7 +1225,7 @@ async function handleAnalysisOnlyRequest(body: Record<string, unknown>) {
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { url, apiKey, instagramUrl, analysisOnly } = body;
+    const { url, apiKey, instagramUrl, analysisOnly, apifyApiKey } = body;
 
     if (analysisOnly) {
       return handleAnalysisOnlyRequest(body);
@@ -1361,7 +1365,7 @@ export async function POST(req: Request) {
       });
     }
 
-    let { profile, analysis, posts } = await scrapeInstagramProfile(detectedInstagram);
+    let { profile, analysis, posts } = await scrapeInstagramProfile(detectedInstagram, apifyApiKey);
 
     if (!hasUsefulProfileData(profile) && isOpenAiApiKey(apiKey) && websiteTextForAi) {
       const websiteFallback = await runAiWebsiteFallbackAnalysis(detectedInstagram, profile, websiteTextForAi, String(apiKey));

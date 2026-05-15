@@ -5,6 +5,7 @@ import * as XLSX from 'xlsx';
 import { UploadCloud, Play, Download, CheckCircle2, XCircle, Loader2, AlertCircle, Instagram, FileJson, FileSpreadsheet, Trash2, Key } from 'lucide-react';
 import { APP_TITLE, APP_VERSION } from '@/lib/version';
 import { isOpenAiApiKey, normalizeOpenAiApiKey } from '@/lib/openai';
+import { isApifyApiKey, normalizeApifyApiToken } from '@/lib/apifyInstagram';
 
 type StageDecision = 'discard' | 'manual_review' | 'scrape_posts';
 type PotentialLevel = 'baixo' | 'medio' | 'alto';
@@ -134,17 +135,26 @@ export default function Home() {
   const [selectedEvaluationId, setSelectedEvaluationId] = useState<number | null>(null);
   const [activeStageSection, setActiveStageSection] = useState<StageSection>('stage3');
   const [openAiKey, setOpenAiKey] = useState<string>('');
+  const [apifyKey, setApifyKey] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const storedKey = localStorage.getItem('ig_scout_openai_key');
     if (storedKey) setOpenAiKey(storedKey);
+    const storedApify = localStorage.getItem('ig_scout_apify_key');
+    if (storedApify) setApifyKey(storedApify);
   }, []);
 
   const handleKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     setOpenAiKey(val);
     localStorage.setItem('ig_scout_openai_key', val);
+  };
+
+  const handleApifyKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setApifyKey(val);
+    localStorage.setItem('ig_scout_apify_key', val);
   };
 
   const normalizeInstagramValue = (value: unknown): string | null => {
@@ -391,7 +401,8 @@ export default function Home() {
               : {
                   url: currentData[i].website,
                   apiKey,
-                  instagramUrl: currentData[i].inputInstagram
+                  instagramUrl: currentData[i].inputInstagram,
+                  apifyApiKey: normalizeApifyApiToken(apifyKey) || undefined
                 }
           )
         });
@@ -638,7 +649,9 @@ export default function Home() {
 
   const successCount = data.filter(d => d.status === 'success').length;
   const normalizedOpenAiKey = normalizeOpenAiApiKey(openAiKey);
+  const normalizedApifyKey = normalizeApifyApiToken(apifyKey);
   const openAiKeyValid = isOpenAiApiKey(normalizedOpenAiKey);
+  const apifyKeyValid = isApifyApiKey(normalizedApifyKey);
   const pendingAnalysisCount = data.filter((item) => canRunFullAnalysis(item)).length;
   const runnableCount = data.filter((item) => shouldProcessRow(item, normalizedOpenAiKey)).length;
   const completionPercentage = progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0;
@@ -736,6 +749,30 @@ export default function Home() {
               ))}
             </select>
             <span className="text-[11px] text-[#64748b] mt-1">Se a busca no site falhar, usa esta coluna (aceita @usuario, usuario ou URL).</span>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <span className="text-xs uppercase tracking-wider font-semibold text-[#64748b] flex items-center gap-1">
+              <Key className="w-3 h-3" /> Apify API Token (Opcional)
+            </span>
+            <input
+              type="password"
+              className="p-2.5 rounded-md border border-[#e2e8f0] bg-[#ffffff] text-sm outline-none focus:border-[#2563eb]"
+              placeholder="apify_api_..."
+              value={apifyKey}
+              onChange={handleApifyKeyChange}
+              disabled={isProcessing}
+            />
+            <span className="text-[10px] text-[#64748b] leading-tight">
+              Melhora o scraping de perfis do Instagram (actor oficial). Também pode ser definido como <code className="text-[10px]">APIFY_API_TOKEN</code> no servidor.
+            </span>
+            {normalizedApifyKey && (
+              <span className={`text-[10px] font-medium ${apifyKeyValid ? 'text-[#15803d]' : 'text-[#b45309]'}`}>
+                {apifyKeyValid
+                  ? 'Token Apify reconhecido.'
+                  : 'Formato esperado: apify_api_... (Console Apify → Integrações).'}
+              </span>
+            )}
           </div>
 
           <div className="flex flex-col gap-2">
