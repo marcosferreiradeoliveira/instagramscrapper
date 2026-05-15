@@ -67,8 +67,14 @@ function mapApifyProfileItem(item: Record<string, unknown>, fallbackUsername: st
       ? (item.about as Record<string, unknown>)
       : null;
 
-  const cidade =
-    String(about?.country ?? about?.city_name ?? item.businessAddress?.city ?? '').trim();
+  const businessAddress =
+    item.businessAddress && typeof item.businessAddress === 'object'
+      ? (item.businessAddress as Record<string, unknown>)
+      : null;
+
+  const cidade = String(
+    about?.country ?? about?.city_name ?? businessAddress?.city ?? ''
+  ).trim();
 
   const profile: ApifyInstagramProfile = {
     username,

@@ -1,5 +1,9 @@
 import { NextResponse } from 'next/server';
 import { fetchInstagramViaApify, getApifyApiToken } from '@/lib/apifyInstagram';
+import { isOpenAiApiKey, normalizeOpenAiApiKey } from '@/lib/openai';
+
+/** Apify + OpenAI podem levar vários minutos por lead */
+export const maxDuration = 300;
 
 type StageDecision = 'discard' | 'manual_review' | 'scrape_posts';
 type PotentialLevel = 'baixo' | 'medio' | 'alto';
@@ -272,7 +276,10 @@ function buildFullAnalysisInput(
     bio: profile.bio || '',
     link_bio: profile.link_bio || '',
     seguidores: profile.seguidores,
-    posts,
+    posts: posts.map((post) => ({
+      ...post,
+      caption: post.caption.length > 600 ? `${post.caption.slice(0, 600)}…` : post.caption
+    })),
     dados_google: {},
     pre_analysis: {
       score: analysis.score,
@@ -285,7 +292,10 @@ function buildFullAnalysisInput(
   };
 }
 
-async function runMainAiFullAnalysis(input: FullAnalysisInput, apiKey: string): Promise<FullAnalysisOutput | null> {
+async function runMainAiFullAnalysis(
+  input: FullAnalysisInput,
+  apiKey: string
+): Promise<{ data: FullAnalysisOutput | null; error: string | null }> {
   try {
     const userPrompt = `Você é a IA principal de análise comercial para prospecção outbound.
 
@@ -338,18 +348,25 @@ Geração de mensagem (Etapa 8): em messages, produza mensagem inicial curta e f
     });
 
     if (!aiRes.ok) {
-      console.error('Main AI full analysis error:', await aiRes.text());
-      return null;
+      const errText = await aiRes.text();
+      console.error('Main AI full analysis error:', errText);
+      return {
+        data: null,
+        error: `OpenAI retornou HTTP ${aiRes.status}. Verifique créditos e permissões da chave.`
+      };
     }
 
     const aiData = await aiRes.json();
     const rawContent = aiData?.choices?.[0]?.message?.content;
-    if (!rawContent) return null;
+    if (!rawContent) {
+      return { data: null, error: 'OpenAI não retornou conteúdo na análise completa.' };
+    }
     const parsed = JSON.parse(rawContent);
-    return normalizeFullAnalysisOutput(parsed);
+    return { data: normalizeFullAnalysisOutput(parsed), error: null };
   } catch (error) {
     console.error('Main AI full analysis failed:', error);
-    return null;
+    const message = error instanceof Error ? error.message : 'erro desconhecido';
+    return { data: null, error: `Falha na análise completa: ${message}` };
   }
 }
 
@@ -471,6 +488,50 @@ function hasUsefulProfileData(profile: InstagramProfileData): boolean {
     profile.seguidores > 0 ||
     profile.total_posts > 0
   );
+}
+
+function formatWebsiteFetchError(error: unknown): { message: string; status: number } {
+  const err = error instanceof Error ? error : new Error(String(error));
+  const cause = err.cause as (NodeJS.ErrnoException & { hostname?: string }) | undefined;
+  const code = cause?.code;
+  const hostname = cause?.hostname;
+
+  if (code === 'ENOTFOUND') {
+    return {
+      message: `Domínio não encontrado (DNS): ${hostname || 'verifique se a URL do site está correta'}`,
+      status: 404
+    };
+  }
+
+  if (code === 'ECONNREFUSED') {
+    return {
+      message: `Conexão recusada pelo servidor${hostname ? ` (${hostname})` : ''}`,
+      status: 502
+    };
+  }
+
+  if (code === 'CERT_HAS_EXPIRED' || code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE') {
+    return {
+      message: `Certificado SSL inválido${hostname ? ` em ${hostname}` : ''}`,
+      status: 502
+    };
+  }
+
+  if (err.name === 'AbortError' || err.name === 'TimeoutError') {
+    return {
+      message: 'Tempo limite excedido ao carregar o site (site muito lento ou fora do ar)',
+      status: 504
+    };
+  }
+
+  if (err.message === 'fetch failed' && cause) {
+    return formatWebsiteFetchError(cause);
+  }
+
+  return {
+    message: err.message || 'Erro ao acessar o site',
+    status: 502
+  };
 }
 
 function parseCountLabel(rawText: string): number {
@@ -1096,9 +1157,75 @@ async function scrapeInstagramProfile(instagramUrl: string): Promise<{ profile: 
   return { profile, analysis, posts };
 }
 
+async function handleAnalysisOnlyRequest(body: Record<string, unknown>) {
+  const apiKey = body.apiKey;
+  const normalizedInstagram = normalizeInstagramUrl(body.instagram);
+  const profile = body.profile as InstagramProfileData | undefined;
+  const analysisRaw = body.analysis as Stage3Analysis | undefined;
+  const postsList = Array.isArray(body.posts) ? (body.posts as ScrapedPost[]) : [];
+
+  if (!normalizedInstagram || !profile?.username) {
+    return NextResponse.json({ error: 'Dados insuficientes para análise completa' }, { status: 400 });
+  }
+
+  const stageAnalysis =
+    analysisRaw && typeof analysisRaw.score === 'number'
+      ? analysisRaw
+      : buildStage3Analysis(profile, true);
+
+  const leadClassifier = body.lead_classifier
+    ? normalizeLeadClassifierPayload(body.lead_classifier, profile, stageAnalysis)
+    : buildRuleBasedLeadClassifier(profile, stageAnalysis);
+
+  const finalAnalysis: Stage3Analysis = {
+    ...stageAnalysis,
+    decision: leadClassifier.decision
+  };
+
+  let fullAnalysis: FullAnalysisOutput | null = null;
+  let fullAnalysisError: string | null = null;
+
+  if (!isOpenAiApiKey(apiKey)) {
+    fullAnalysisError = 'Chave OpenAI inválida ou ausente (formato sk-...).';
+  } else if (leadClassifier.decision === 'discard') {
+    fullAnalysisError = 'Lead descartado: análise completa não é executada.';
+  } else {
+    const fullInput = buildFullAnalysisInput(profile, postsList, finalAnalysis, leadClassifier);
+    const fullResult = await runMainAiFullAnalysis(fullInput, String(apiKey).trim());
+    fullAnalysis = fullResult.data;
+    fullAnalysisError = fullResult.error;
+  }
+
+  const finalOutput = buildSystemFinalOutput(
+    normalizedInstagram,
+    profile,
+    finalAnalysis,
+    leadClassifier,
+    postsList,
+    fullAnalysis
+  );
+
+  return NextResponse.json({
+    instagram: normalizedInstagram,
+    profile,
+    analysis: finalAnalysis,
+    lead_classifier: leadClassifier,
+    posts: postsList,
+    full_analysis: fullAnalysis,
+    full_analysis_error: fullAnalysisError,
+    final_output: finalOutput,
+    pain_blocks_catalog: [...PAIN_BLOCKS]
+  });
+}
+
 export async function POST(req: Request) {
   try {
-    const { url, apiKey, instagramUrl } = await req.json();
+    const body = await req.json();
+    const { url, apiKey, instagramUrl, analysisOnly } = body;
+
+    if (analysisOnly) {
+      return handleAnalysisOnlyRequest(body);
+    }
 
     const normalizedInputInstagram = normalizeInstagramUrl(instagramUrl);
     const hasUrlInput = Boolean(url && String(url).trim());
@@ -1156,11 +1283,9 @@ export async function POST(req: Request) {
         }
       }
 
-      if (!response && fetchError) {
-        throw fetchError;
-      }
       if (!response) {
-        throw new Error('Falha ao acessar o site');
+        const fetchFailure = formatWebsiteFetchError(fetchError ?? new Error('Falha ao acessar o site'));
+        return NextResponse.json({ error: fetchFailure.message }, { status: fetchFailure.status });
       }
 
       if (!response.ok) {
@@ -1172,7 +1297,7 @@ export async function POST(req: Request) {
         websiteTextForAi = stripHtmlForAi(html);
 
         // If an OpenAI API Key is provided, let's use it for smarter extraction
-        if (apiKey && String(apiKey).startsWith('sk-')) {
+        if (isOpenAiApiKey(apiKey)) {
           // Basic sanitization to save context length: remove scripts, styles, svgs and tags, keeping only text and hrefs
           const cleanHtml = html.substring(0, 20000); // Take first ~20k chars to be safe on token limits
 
@@ -1238,7 +1363,7 @@ export async function POST(req: Request) {
 
     let { profile, analysis, posts } = await scrapeInstagramProfile(detectedInstagram);
 
-    if (!hasUsefulProfileData(profile) && apiKey && String(apiKey).startsWith('sk-') && websiteTextForAi) {
+    if (!hasUsefulProfileData(profile) && isOpenAiApiKey(apiKey) && websiteTextForAi) {
       const websiteFallback = await runAiWebsiteFallbackAnalysis(detectedInstagram, profile, websiteTextForAi, String(apiKey));
       if (websiteFallback) {
         profile = websiteFallback.profile;
@@ -1246,10 +1371,9 @@ export async function POST(req: Request) {
       }
     }
 
-    const aiClassifier =
-      apiKey && String(apiKey).startsWith('sk-')
-        ? await runMiniAiLeadClassifier(profile, analysis, String(apiKey))
-        : null;
+    const aiClassifier = isOpenAiApiKey(apiKey)
+      ? await runMiniAiLeadClassifier(profile, analysis, String(apiKey).trim())
+      : null;
     const leadClassifier = aiClassifier || buildRuleBasedLeadClassifier(profile, analysis);
     const finalAnalysis: Stage3Analysis = {
       ...analysis,
@@ -1260,9 +1384,20 @@ export async function POST(req: Request) {
       : [];
 
     let fullAnalysis: FullAnalysisOutput | null = null;
-    if (apiKey && String(apiKey).startsWith('sk-') && leadClassifier.decision !== 'discard') {
+    let fullAnalysisError: string | null = null;
+
+    if (!isOpenAiApiKey(apiKey)) {
+      fullAnalysisError =
+        leadClassifier.decision !== 'discard'
+          ? 'Chave OpenAI não informada: análise completa (etapas 6–8) não foi executada.'
+          : null;
+    } else if (leadClassifier.decision === 'discard') {
+      fullAnalysisError = null;
+    } else {
       const fullInput = buildFullAnalysisInput(profile, postsToReturn, finalAnalysis, leadClassifier);
-      fullAnalysis = await runMainAiFullAnalysis(fullInput, String(apiKey));
+      const fullResult = await runMainAiFullAnalysis(fullInput, String(apiKey).trim());
+      fullAnalysis = fullResult.data;
+      fullAnalysisError = fullResult.error;
     }
 
     const finalOutput = buildSystemFinalOutput(
@@ -1281,15 +1416,14 @@ export async function POST(req: Request) {
       lead_classifier: leadClassifier,
       posts: postsToReturn,
       full_analysis: fullAnalysis,
+      full_analysis_error: fullAnalysisError,
       final_output: finalOutput,
       pain_blocks_catalog: [...PAIN_BLOCKS]
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Scraping error:', error);
-    if (error.name === 'TimeoutError' || error.name === 'AbortError') {
-      return NextResponse.json({ error: 'Tempo limite excedido ao carregar o site (site muito lento ou fora do ar)' }, { status: 504 });
-    }
-    return NextResponse.json({ error: error.message || 'Erro ao acessar o site' }, { status: 500 });
+    const fetchFailure = formatWebsiteFetchError(error);
+    return NextResponse.json({ error: fetchFailure.message }, { status: fetchFailure.status });
   }
 }
 

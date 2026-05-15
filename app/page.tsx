@@ -4,6 +4,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import { UploadCloud, Play, Download, CheckCircle2, XCircle, Loader2, AlertCircle, Instagram, FileJson, FileSpreadsheet, Trash2, Key } from 'lucide-react';
 import { APP_TITLE, APP_VERSION } from '@/lib/version';
+import { isOpenAiApiKey, normalizeOpenAiApiKey } from '@/lib/openai';
 
 type StageDecision = 'discard' | 'manual_review' | 'scrape_posts';
 type PotentialLevel = 'baixo' | 'medio' | 'alto';
@@ -70,9 +71,54 @@ interface CompanyData {
   evaluationSignals: string[];
   painPoints: string[];
   fullAnalysis: FullAnalysis | null;
+  fullAnalysisError?: string | null;
   finalOutput: SystemFinalOutput | null;
   status: 'pending' | 'processing' | 'success' | 'not_found' | 'error';
   errorMessage?: string;
+}
+
+function extractUsernameFromInstagramLink(link: string): string | null {
+  const match = link.match(/instagram\.com\/([a-zA-Z0-9._]+)/i);
+  return match?.[1] || null;
+}
+
+function getProfileForAnalysis(item: CompanyData): InstagramProfileData | null {
+  if (item.profileData?.username) {
+    return item.profileData;
+  }
+  if (!item.instagramLink) return null;
+
+  const username = extractUsernameFromInstagramLink(item.instagramLink);
+  if (!username) return null;
+
+  return {
+    username,
+    nome_perfil: '',
+    bio: '',
+    seguidores: 0,
+    seguindo: 0,
+    total_posts: 0,
+    link_bio: '',
+    categoria: '',
+    cidade: '',
+    is_business: false
+  };
+}
+
+function canRunFullAnalysis(item: CompanyData): boolean {
+  if (item.status !== 'success' || !item.instagramLink) return false;
+  if (!item.decision || item.decision === 'discard') return false;
+  if (!getProfileForAnalysis(item)) return false;
+  return !item.fullAnalysis;
+}
+
+function needsFullAnalysis(item: CompanyData, openAiKey: string): boolean {
+  return isOpenAiApiKey(openAiKey) && canRunFullAnalysis(item);
+}
+
+function shouldProcessRow(item: CompanyData, openAiKey: string): boolean {
+  if (item.status === 'pending' || item.status === 'error') return true;
+  return needsFullAnalysis(item, openAiKey);
 }
 
 export default function Home() {
@@ -153,6 +199,7 @@ export default function Home() {
         evaluationSignals: [],
         painPoints: [],
         fullAnalysis: null,
+        fullAnalysisError: null,
         finalOutput: null,
         status: 'pending' as const
       }))
@@ -286,12 +333,29 @@ export default function Home() {
     setIsProcessing(true);
     setError(null);
 
+    const apiKey = normalizeOpenAiApiKey(openAiKey);
     let currentData = [...data];
+    const rowIndices = currentData
+      .map((_, index) => index)
+      .filter((index) => shouldProcessRow(currentData[index], apiKey));
 
-    for (let i = 0; i < currentData.length; i++) {
-      if (currentData[i].status === 'success' || currentData[i].status === 'not_found') {
-        continue;
-      }
+    if (rowIndices.length === 0) {
+      const pendingAnalysis = currentData.filter((item) => canRunFullAnalysis(item)).length;
+      setError(
+        pendingAnalysis > 0 && !isOpenAiApiKey(apiKey)
+          ? 'Chave OpenAI inválida. Cole uma chave que comece com sk- (painel OpenAI → API keys).'
+          : 'Nenhuma linha pendente. Todos os leads já foram processados.'
+      );
+      setIsProcessing(false);
+      return;
+    }
+
+    setProgress({ current: 0, total: rowIndices.length });
+    let processedCount = 0;
+
+    for (const i of rowIndices) {
+      const analysisOnly = needsFullAnalysis(currentData[i], apiKey);
+      const profileForAnalysis = getProfileForAnalysis(currentData[i]);
 
       currentData[i].status = 'processing';
       setData([...currentData]);
@@ -300,11 +364,36 @@ export default function Home() {
         const response = await fetch('/api/scrape', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            url: currentData[i].website,
-            apiKey: openAiKey,
-            instagramUrl: currentData[i].inputInstagram
-          })
+          body: JSON.stringify(
+            analysisOnly
+              ? {
+                  analysisOnly: true,
+                  apiKey,
+                  instagram: currentData[i].instagramLink,
+                  profile: profileForAnalysis,
+                  analysis: {
+                    score: currentData[i].score ?? 0,
+                    decision: currentData[i].decision ?? 'manual_review',
+                    signals: currentData[i].evaluationSignals,
+                    pain_points: currentData[i].painPoints
+                  },
+                  lead_classifier: {
+                    decision: currentData[i].decision,
+                    business_confidence: currentData[i].businessConfidence,
+                    commercial_signals: currentData[i].evaluationSignals,
+                    likely_pains: currentData[i].painPoints,
+                    potential_level: currentData[i].potentialLevel,
+                    recommended_posts_to_scrape: currentData[i].recommendedPostsToScrape,
+                    reason: currentData[i].classificationReason
+                  },
+                  posts: []
+                }
+              : {
+                  url: currentData[i].website,
+                  apiKey,
+                  instagramUrl: currentData[i].inputInstagram
+                }
+          )
         });
 
         let result;
@@ -342,6 +431,8 @@ export default function Home() {
               result.full_analysis && typeof result.full_analysis === 'object'
                 ? (result.full_analysis as FullAnalysis)
                 : null;
+            currentData[i].fullAnalysisError =
+              typeof result.full_analysis_error === 'string' ? result.full_analysis_error : null;
             currentData[i].finalOutput =
               result.final_output && typeof result.final_output === 'object'
                 ? (result.final_output as SystemFinalOutput)
@@ -441,11 +532,12 @@ export default function Home() {
         }
       }
 
-      setProgress({ current: i + 1, total: currentData.length });
+      processedCount += 1;
+      setProgress({ current: processedCount, total: rowIndices.length });
       setData([...currentData]);
 
       // Delay to avoid hammering external servers
-      await new Promise(res => setTimeout(res, 500));
+      await new Promise(res => setTimeout(res, analysisOnly ? 300 : 500));
     }
 
     setIsProcessing(false);
@@ -545,6 +637,10 @@ export default function Home() {
   };
 
   const successCount = data.filter(d => d.status === 'success').length;
+  const normalizedOpenAiKey = normalizeOpenAiApiKey(openAiKey);
+  const openAiKeyValid = isOpenAiApiKey(normalizedOpenAiKey);
+  const pendingAnalysisCount = data.filter((item) => canRunFullAnalysis(item)).length;
+  const runnableCount = data.filter((item) => shouldProcessRow(item, normalizedOpenAiKey)).length;
   const completionPercentage = progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0;
   const selectedEvaluationItem =
     data.find(item => item.id === selectedEvaluationId) ||
@@ -657,6 +753,13 @@ export default function Home() {
             <span className="text-[10px] text-[#64748b] leading-tight">
               Necessária para extração no site, classificador (camada 2) e análise completa (camada 6). Descartes não disparam a análise completa (economia).
             </span>
+            {normalizedOpenAiKey && (
+              <span className={`text-[10px] font-medium ${openAiKeyValid ? 'text-[#15803d]' : 'text-[#b45309]'}`}>
+                {openAiKeyValid
+                  ? 'Chave reconhecida — etapas 6–8 habilitadas.'
+                  : 'Formato inválido: use uma chave OpenAI que comece com sk- (não é URL nem senha do app).'}
+              </span>
+            )}
           </div>
 
           <div className="mt-auto flex flex-col gap-3">
@@ -679,13 +782,28 @@ export default function Home() {
                 </button>
               </div>
             )}
+            {pendingAnalysisCount > 0 && (
+              <button
+                type="button"
+                onClick={processLinks}
+                disabled={isProcessing || !openAiKeyValid}
+                title={openAiKeyValid ? undefined : 'Informe uma chave OpenAI válida (sk-...)'}
+                className="bg-[#0f766e] text-white border-none p-3 rounded-lg font-semibold text-sm cursor-pointer transition-colors hover:bg-[#0d9488] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {isProcessing ? (
+                  <><Loader2 className="w-4 h-4 animate-spin" /> Gerando análises...</>
+                ) : (
+                  <><Play className="w-4 h-4" /> Completar análises (IA) ({pendingAnalysisCount})</>
+                )}
+              </button>
+            )}
             <button 
               onClick={processLinks}
-              disabled={isProcessing || data.length === 0 || progress.current === progress.total}
+              disabled={isProcessing || data.length === 0 || runnableCount === 0}
               className="bg-[#2563eb] text-white border-none p-3 rounded-lg font-semibold text-sm cursor-pointer transition-colors hover:bg-[#1d4ed8] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {isProcessing ? (
-                <><Loader2 className="w-4 h-4 animate-spin" /> Buscando no Site...</>
+                <><Loader2 className="w-4 h-4 animate-spin" /> Processando...</>
               ) : (
                 <><Play className="w-4 h-4" /> Iniciar Varredura</>
               )}
@@ -819,9 +937,25 @@ export default function Home() {
             ) : activeStageSection === 'stage6' ? (
               selectedEvaluationItem.decision === 'discard' ? (
                 <p className="text-xs text-[#64748b]">Lead descartado: análise completa não é executada (economia de custo).</p>
+              ) : !openAiKeyValid ? (
+                <p className="text-xs text-[#b45309]">
+                  {normalizedOpenAiKey
+                    ? 'A chave no painel lateral não está no formato OpenAI (deve começar com sk-). Gere em platform.openai.com → API keys.'
+                    : 'Informe a OpenAI API Key (sk-...) no painel lateral.'}
+                  {pendingAnalysisCount > 0 && ' Depois clique em Completar análises (IA).'}
+                </p>
+              ) : selectedEvaluationItem.fullAnalysisError ? (
+                <p className="text-xs text-[#b91c1c]">
+                  Análise completa falhou: {selectedEvaluationItem.fullAnalysisError}
+                </p>
               ) : !selectedEvaluationItem.fullAnalysis ? (
                 <p className="text-xs text-[#64748b]">
-                  Sem análise completa ainda. Informe a OpenAI API Key e rode a varredura de novo, ou a chamada à API falhou.
+                  Análise completa ainda não gerada.
+                  {pendingAnalysisCount > 0 ? (
+                    <> Use o botão verde <b>Completar análises (IA) ({pendingAnalysisCount})</b> na barra lateral.</>
+                  ) : (
+                    <> Rode <b>Iniciar Varredura</b> com a API key preenchida.</>
+                  )}
                 </p>
               ) : (
                 <div className="grid grid-cols-1 gap-2 text-xs text-[#334155]">
