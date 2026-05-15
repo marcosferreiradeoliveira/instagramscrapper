@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { fetchInstagramViaApify, getApifyApiToken } from '@/lib/apifyInstagram';
 
 type StageDecision = 'discard' | 'manual_review' | 'scrape_posts';
 type PotentialLevel = 'baixo' | 'medio' | 'alto';
@@ -192,6 +193,21 @@ function normalizeFullAnalysisOutput(raw: unknown): FullAnalysisOutput {
     onde_perde_dinheiro: filterToPainCatalog(r.onde_perde_dinheiro),
     programa_recomendado: String(r.programa_recomendado ?? '').trim(),
     messages
+  };
+}
+
+function normalizeStage3AnalysisPayload(raw: unknown): Stage3Analysis | null {
+  if (!raw || typeof raw !== 'object') return null;
+
+  const r = raw as Record<string, unknown>;
+  const score = Number(r.score);
+  if (!Number.isFinite(score)) return null;
+
+  return {
+    score: Math.max(0, Math.min(21, Math.round(score))),
+    decision: normalizeDecision(r.decision),
+    signals: Array.isArray(r.signals) ? r.signals.map((item) => String(item)).filter(Boolean) : [],
+    pain_points: Array.isArray(r.pain_points) ? r.pain_points.map((item) => String(item)).filter(Boolean) : []
   };
 }
 
@@ -433,6 +449,28 @@ function extractInstagramFromHtml(html: string): string | null {
 
 function decodeEscapedUnicode(text: string): string {
   return text.replace(/\\u([\dA-Fa-f]{4})/g, (_, group) => String.fromCharCode(parseInt(group, 16)));
+}
+
+function stripHtmlForAi(html: string): string {
+  return html
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
+    .replace(/<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .substring(0, 12000);
+}
+
+function hasUsefulProfileData(profile: InstagramProfileData): boolean {
+  return Boolean(
+    profile.nome_perfil ||
+    profile.bio ||
+    profile.link_bio ||
+    profile.categoria ||
+    profile.seguidores > 0 ||
+    profile.total_posts > 0
+  );
 }
 
 function parseCountLabel(rawText: string): number {
@@ -796,6 +834,108 @@ Retorne apenas JSON válido, sem markdown.`;
   }
 }
 
+async function runAiWebsiteFallbackAnalysis(
+  instagramUrl: string,
+  baseProfile: InstagramProfileData,
+  websiteText: string,
+  apiKey: string
+): Promise<{ profile: InstagramProfileData; analysis: Stage3Analysis } | null> {
+  if (!websiteText.trim()) return null;
+
+  try {
+    const prompt = `ROLE:
+Você é um analista de pré-qualificação comercial para outbound.
+
+CONTEXTO:
+O Instagram foi encontrado, mas o Instagram bloqueou ou não retornou dados públicos do perfil. Use APENAS o conteúdo textual do site da empresa para estimar uma pré-análise inicial.
+
+REGRAS:
+- Não invente métricas de Instagram (seguidores, seguindo, posts).
+- Se o site mostrar negócio real, serviços, CTA, contato, proposta ou localização, use esses sinais no score.
+- Score deve seguir escala de 0 a 21 compatível com:
+  negócio real, bio/texto comercial, CTA, contato, serviço descrito, localização, branding, link.
+- Se houver evidência comercial suficiente, não deixe score 0.
+- decision: "discard" se score < 7, "manual_review" se 7 a 9, "scrape_posts" se >= 10.
+
+OUTPUT JSON:
+{
+  "profile": {
+    "nome_perfil": "",
+    "bio": "",
+    "link_bio": "",
+    "categoria": "",
+    "cidade": "",
+    "is_business": true
+  },
+  "analysis": {
+    "score": 0,
+    "decision": "discard|manual_review|scrape_posts",
+    "signals": [],
+    "pain_points": []
+  }
+}
+
+INPUT:
+${JSON.stringify({ instagram_url: instagramUrl, username: baseProfile.username, website_text: websiteText }, null, 2)}
+
+Retorne apenas JSON válido, sem markdown.`;
+
+    const aiRes = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        temperature: 0,
+        response_format: { type: 'json_object' },
+        messages: [
+          {
+            role: 'system',
+            content: 'Você estima uma pré-análise comercial em JSON quando dados do Instagram estão indisponíveis. Não invente métricas de Instagram.'
+          },
+          {
+            role: 'user',
+            content: prompt
+          }
+        ]
+      })
+    });
+
+    if (!aiRes.ok) {
+      console.error('Website fallback analysis error:', await aiRes.text());
+      return null;
+    }
+
+    const aiData = await aiRes.json();
+    const rawContent = aiData?.choices?.[0]?.message?.content;
+    if (!rawContent) return null;
+
+    const parsed = JSON.parse(rawContent);
+    const parsedProfile = parsed?.profile && typeof parsed.profile === 'object'
+      ? (parsed.profile as Record<string, unknown>)
+      : {};
+    const parsedAnalysis = normalizeStage3AnalysisPayload(parsed?.analysis);
+    if (!parsedAnalysis) return null;
+
+    const profile: InstagramProfileData = {
+      ...baseProfile,
+      nome_perfil: String(parsedProfile.nome_perfil || baseProfile.nome_perfil || baseProfile.username).trim(),
+      bio: String(parsedProfile.bio || baseProfile.bio || '').trim(),
+      link_bio: String(parsedProfile.link_bio || baseProfile.link_bio || '').trim(),
+      categoria: String(parsedProfile.categoria || baseProfile.categoria || '').trim(),
+      cidade: String(parsedProfile.cidade || baseProfile.cidade || '').trim(),
+      is_business: Boolean(parsedProfile.is_business || baseProfile.is_business || parsedAnalysis.score >= 7)
+    };
+
+    return { profile, analysis: parsedAnalysis };
+  } catch (error) {
+    console.error('Website fallback analysis failed:', error);
+    return null;
+  }
+}
+
 async function scrapeInstagramProfile(instagramUrl: string): Promise<{ profile: InstagramProfileData; analysis: Stage3Analysis; posts: ScrapedPost[] }> {
   const username = extractUsernameFromInstagramUrl(instagramUrl);
   if (!username) {
@@ -818,6 +958,19 @@ async function scrapeInstagramProfile(instagramUrl: string): Promise<{ profile: 
   let hasProfilePicture = false;
   let profile = { ...baseProfile };
   let posts: ScrapedPost[] = [];
+
+  if (getApifyApiToken()) {
+    const apifyResult = await fetchInstagramViaApify(username, instagramUrl);
+    if (apifyResult) {
+      profile = { ...baseProfile, ...apifyResult.profile };
+      posts = apifyResult.posts;
+      hasProfilePicture = apifyResult.hasProfilePicture;
+      if (hasUsefulProfileData(profile)) {
+        const analysis = buildStage3Analysis(profile, hasProfilePicture);
+        return { profile, analysis, posts };
+      }
+    }
+  }
 
   try {
     const profileRes = await fetch(`https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`, {
@@ -955,6 +1108,7 @@ export async function POST(req: Request) {
     }
 
     let detectedInstagram: string | null = normalizedInputInstagram;
+    let websiteTextForAi = '';
     const normalizedWebsiteAsInstagram = hasUrlInput ? normalizeInstagramUrl(url) : null;
     if (!detectedInstagram && normalizedWebsiteAsInstagram) {
       detectedInstagram = normalizedWebsiteAsInstagram;
@@ -1015,15 +1169,12 @@ export async function POST(req: Request) {
         }
       } else {
         const html = await response.text();
+        websiteTextForAi = stripHtmlForAi(html);
 
         // If an OpenAI API Key is provided, let's use it for smarter extraction
         if (apiKey && String(apiKey).startsWith('sk-')) {
           // Basic sanitization to save context length: remove scripts, styles, svgs and tags, keeping only text and hrefs
-          const cleanHtml = html
-            .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-            .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
-            .replace(/<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>/gi, '')
-            .substring(0, 20000); // Take first ~20k chars to be safe on token limits
+          const cleanHtml = html.substring(0, 20000); // Take first ~20k chars to be safe on token limits
 
           try {
             const gptRes = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -1085,7 +1236,16 @@ export async function POST(req: Request) {
       });
     }
 
-    const { profile, analysis, posts } = await scrapeInstagramProfile(detectedInstagram);
+    let { profile, analysis, posts } = await scrapeInstagramProfile(detectedInstagram);
+
+    if (!hasUsefulProfileData(profile) && apiKey && String(apiKey).startsWith('sk-') && websiteTextForAi) {
+      const websiteFallback = await runAiWebsiteFallbackAnalysis(detectedInstagram, profile, websiteTextForAi, String(apiKey));
+      if (websiteFallback) {
+        profile = websiteFallback.profile;
+        analysis = websiteFallback.analysis;
+      }
+    }
+
     const aiClassifier =
       apiKey && String(apiKey).startsWith('sk-')
         ? await runMiniAiLeadClassifier(profile, analysis, String(apiKey))

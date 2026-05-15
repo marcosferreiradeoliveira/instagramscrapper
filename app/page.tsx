@@ -3,6 +3,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import { UploadCloud, Play, Download, CheckCircle2, XCircle, Loader2, AlertCircle, Instagram, FileJson, FileSpreadsheet, Trash2, Key } from 'lucide-react';
+import { APP_TITLE, APP_VERSION } from '@/lib/version';
 
 type StageDecision = 'discard' | 'manual_review' | 'scrape_posts';
 type PotentialLevel = 'baixo' | 'medio' | 'alto';
@@ -556,7 +557,13 @@ export default function Home() {
       <div className="h-16 bg-[#ffffff] border-b border-[#e2e8f0] flex items-center justify-between px-6 shrink-0">
         <div className="flex items-center gap-2.5 font-bold text-lg text-[#2563eb]">
           <Instagram className="w-6 h-6" />
-          IG-Scout AI (Web Scraper)
+          <span>{APP_TITLE}</span>
+          <span
+            className="font-semibold text-[11px] text-[#64748b] bg-[#f1f5f9] border border-[#e2e8f0] px-2 py-0.5 rounded-full"
+            title={`Versão ${APP_VERSION}`}
+          >
+            v{APP_VERSION}
+          </span>
         </div>
         <div className="text-sm text-[#64748b]">
           Logged in as <b className="text-[#1e293b]">Admin</b>
